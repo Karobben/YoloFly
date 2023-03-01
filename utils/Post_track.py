@@ -277,10 +277,10 @@ fourcc = cv2.VideoWriter_fourcc(*'XVID')
 out = cv2.VideoWriter('/run/user/1000/gvfs/sftp:host=129.81.246.74/denglab_980/Wenkan/output.avi',fourcc, 20.0, (1920,1080))
 
 cap=cv2.VideoCapture(Video)
-Num = 1900-1
-cap.set(1,1900)
+Num = 1
+#cap.set(1,1900)
 
-while Num <= 2400:
+while Num <= 18000:
     Num += 1 
     TMP = TBR[TBR[0]==Num]
     ret,img = cap.read()
