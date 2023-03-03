@@ -103,7 +103,7 @@ def Obj_los_test(frame, ob_ls, cap):
     print("Mask ratio:", CoverR )
     if CoverR>=.19:
         print("Over Corroded caused object lost, test the overlap")
-        return {'Type' : "CroLst", "drift" : box_center(img_t)}
+        return ["CroLst", box_center(img_t)]
 
     cap.set(1,frame-1)
     ret,img_f=cap.read()
@@ -147,13 +147,13 @@ def Obj_los_test(frame, ob_ls, cap):
                 img_now[img_now>50] =0
                 Scores.update({ i: ssim(img_now, img_old)})
             best_frame = max(Scores, key=Scores.get)
-            return {'Type' : "Overlap", "frame": best_frame, "drift" : box_center(img_t)}
+            return ["Overlap", best_frame, box_center(img_t)]
         else:
             print(' No overlap')
-            return {'Type' : "CroLst", "drift" : box_center(img_t)}
+            return ["CroLst", box_center(img_t)]
     else:
         print('Less similarities, fastmoving')
-        return {'Type' : "CroLst", "drift" :(0,0)}
+        return ["CroLst", (0,0)]
 
 ## Functions down
 
@@ -166,14 +166,14 @@ Num = 12
 OUTPUT = 'test.csv'
 
 Box_size_check = 1.3
-Overlap_thres  = .45
+Overlap_thres  = .6
 
 TB = pd.read_csv(CSV_f, sep = ' ', header = None)
 cap=cv2.VideoCapture(Video)
 
 
-Start = 1
-End = 18000
+Start = 3000
+End = 3300
 # Define the Start 
 S_TMP = TB[TB[0]==Start]
 S_TMP_B = S_TMP[S_TMP[1]==0]
@@ -220,9 +220,8 @@ for frame in range(Start +1, End+1):
         TMP_B.ID.iloc[Dots[1][i]] = S_TMP_B.ID[S_TMP_B.find].iloc[Dots[0][i]]
     ## Step 2
     Dots = Dots_Sort(Dots_from[~S_TMP_B.find],Dots_to[TMP_B.ID.isna()])
-    mask = TMP_B[TMP_B.ID.isna()]
     for i in range(len(Dots)):
-        TMP_B.ID.iloc[ TMP_B.index == mask.iloc[Dots[1][i]].name] = S_TMP_B.ID[~S_TMP_B.find].iloc[Dots[0][i]]
+        TMP_B.ID.iloc[ TMP_B.index == TMP_B[TMP_B.ID.isna()].iloc[Dots[1][i]].name] = S_TMP_B.ID[~S_TMP_B.find].iloc[Dots[0][i]]
 
     # Missing Check
     if len(TMP_B[TMP_B.ID != None]) < len(S_TMP_B):
@@ -231,34 +230,24 @@ for frame in range(Start +1, End+1):
             ob_ls = S_TMP_B.ID[S_TMP_B.ID.isin(TMP_B.ID)==False].iloc[0]
             print("lost object:", ob_ls, "in frame:", frame)
             Lost = Obj_los_test(frame, ob_ls, cap)
-            if Lost['Type'] == "CroLst":
+            if Lost[0] == "CroLst":
                 # update the frame from the object lost
                 Obl_TB = S_TMP_B[S_TMP_B.ID==ob_ls]
                 Obl_TB[0] = frame
-                Obl_TB[2] += Lost['drift'][0]
-                Obl_TB[3] += Lost['drift'][1]
+                Obl_TB[2] += Lost[1][0]
+                Obl_TB[3] += Lost[1][1]
                 Obl_TB.find = False
                 TMP_B = pd.concat([TMP_B, Obl_TB])
-            elif Lost['Type'] == "Overlap":
-                Obl_TB = TB_cache[TB_cache[0]== Lost['frame']]
+            elif Lost[0] == "Overlap":
+                Obl_TB = TB_cache[TB_cache[0]== Lost[1]]
                 Obl_TB = Obl_TB[Obl_TB.ID==ob_ls]
                 Obl_TB[0] = frame
-                Obl_TB[2] += Lost['drift'][0]
-                Obl_TB[3] += Lost['drift'][1]
+                Obl_TB[2] += Lost[2][0]
+                Obl_TB[3] += Lost[2][1]
                 Obl_TB.find = False
                 TMP_B = pd.concat([TMP_B, Obl_TB])
             else:
                 print("\n\nERROR!!!:", frame, ob_ls, "\n\n")
-            Over_adjust = Overlap_test(ob_ls)
-            if Over_adjust != False:
-                print("Adjust the size of ")
-                TMP_chage = TB_cache[ TB_cache[0]== Over_adjust[0]]
-                TMP_chage = TMP_chage[ TMP_chage.ID == Over_adjust[1]]
-                #TMP_B.iloc[np.where(TMP_B.ID==ob_ov)[0],2] += Over_adjust[2][0]
-                #TMP_B.iloc[np.where(TMP_B.ID==ob_ov)[0],3] += Over_adjust[2][1]
-                TMP_B.iloc[np.where(TMP_B.ID==ob_ov)[0],4] = TMP_chage[4]
-                TMP_B.iloc[np.where(TMP_B.ID==ob_ov)[0],5] = TMP_chage[5]
-
     # remove false positive results
     TMP_B = TMP_B[TMP_B.ID.isna()==False]
     Dots_to = TMP_B.iloc[:,2:4].to_numpy()
@@ -278,37 +267,7 @@ for frame in range(Start +1, End+1):
 
 
 
-def Overlap_test(ob_ls):
-    rct_los = creat_polygon(TMP_B[TMP_B.ID==ob_ls].to_numpy()[0][2:6])
-    Inter_dict1 = {}
-    Inter_dict2 = {}
-    for line in range(len(TMP_B)):
-        if TMP_B.ID.iloc[line] != ob_ls:
-            rct_tag = creat_polygon(TMP_B.iloc[line,2:6].to_numpy())
-            Inter_dict1.update({ TMP_B.ID.iloc[line] : rct_los.intersection(rct_tag).area/ rct_los.area})
-            Inter_dict2.update({ TMP_B.ID.iloc[line] : rct_los.intersection(rct_tag).area/ rct_tag.area})
-    if max(Inter_dict1.values()) < max(Inter_dict2.values()):
-        Inter_dict1 =  Inter_dict2
-    if max(Inter_dict1.values()) >= Overlap_thres:
-        ob_ov = max(Inter_dict1, key= Inter_dict1.get )
-        TMP_cache = TB_cache[TB_cache.ID == ob_ov]
-        TMP_cache['Area'] = TMP_cache[4] * TMP_cache[5]
-        Ar_change = (TMP_B[TMP_B.ID == ob_ov][4] * TMP_B[TMP_B.ID == ob_ov][5]).to_list()[0] / TMP_cache.Area.mean()
-        if Ar_change >= Box_size_check:
-            bst_frame = TMP_cache[0][np.abs(TMP_cache.Area - TMP_cache.Area.mean())== min(np.abs(TMP_cache.Area - TMP_cache.Area.mean()))]
-            # then, read images and drift by the center
-            cap.set(1,frame)
-            ret,img_t=cap.read()
-            OB_TB = S_TMP_B[S_TMP_B.ID == ob_ov]
-            OB_TB[2] *= 1920
-            OB_TB[4] *= 1920
-            OB_TB[3] *= 1080
-            OB_TB[5] *= 1080
-            img_t = img_t[int(OB_TB[3]- OB_TB[5]/2):int(OB_TB[3] + OB_TB[5]/2), int(OB_TB[2] - OB_TB[4]/2 ):int(OB_TB[2] + OB_TB[4]/2)]
-            img_t = cv2.cvtColor(img_t,cv2.COLOR_RGB2GRAY)
-            img_t = cv2.GaussianBlur(img_t, (5, 5), 10)
-            return (bst_frame.to_list()[0], ob_ov, box_center(img_t))
-    return False
+
 
 
 
@@ -333,7 +292,7 @@ img_f = cv2.GaussianBlur(img_f, (5, 5), 100)
 
 TBR = pd.read_csv(OUTPUT, header= None)
 fourcc = cv2.VideoWriter_fourcc(*'XVID')
-out = cv2.VideoWriter('/run/user/1000/gvfs/sftp:host=129.81.246.74/denglab_980/Wenkanoutput2.avi',fourcc, 20.0, (1920,1080))
+out = cv2.VideoWriter('output.avi',fourcc, 20.0, (1920,1080))
 
 cap=cv2.VideoCapture(Video)
 Num = Start -1
