@@ -122,7 +122,11 @@ Video=/mnt/8A26661926660713/Vlog/upload/cacer/C0022_Trim.mp4
 python3 detect_220101.py  --weight $Model   --source $Video --conf 0.4 --head-bind --img-size 1280 --num-fly 11 --img-save
 ```
 
+### Sorting the flies
 
+```bash
+python /mnt/Data/PopOS/Github/Yolo/YoloFly_ken/utils/Post_track.py
+```
 
 If you have more than 1 Platte in a video, we can plot the position for each fly to check if there are any switch between different petri dish.
 ```bash

@@ -409,6 +409,14 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     if head_bind:
                         from utils.Head_bind import head_match
                         head_bind = head_match()
+                        print("\n\n\n\n\n\n\n\n")
+                        print("Fly Matrix; Fly Matrix; Fly Matrix")
+                        print(FLY_matrix)
+                        print("\n")
+                        print(Num_frame)
+                        print("\n")
+                        print(TB_head)
+
                         head_bind.main(FLY_matrix, Num_frame, TB_head)
                         print(TB[TB[0]==1])
                         print(head_bind.MATCH_result)
