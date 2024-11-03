@@ -26,7 +26,6 @@
 *.csv
 
 storage.googleapis.com
-runs/detect
 data/*
 !data/hyps/*
 !data/images/zidane.jpg
