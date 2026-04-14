@@ -1,4 +1,12 @@
+if (!requireNamespace("BSDA", quietly = TRUE)) {
+  message("Skipping Nst_dist_all: install.packages('BSDA') for pairwise t-tests")
+  quit(save = "no", status = 0)
+}
 library(BSDA)
+if (!requireNamespace("readxl", quietly = TRUE)) {
+  message("Skipping Nst_dist_all: install.packages('readxl') for Video_list.xlsx")
+  quit(save = "no", status = 0)
+}
 library(readxl)
 library(ggplot2)
 library(stringr)
@@ -21,8 +29,8 @@ Wei_Mean <- function(TB){
   }
   WM = W_mean_t1/W_mean_t2
   WS = sqrt(1/W_mean_t2)
-  DF = sum(TB[3]) - nrow(TB)
-  SE = WS/sqrt(sum(TB[3]))
+  DF = sum(TB[,3]) - nrow(TB)
+  SE = WS/sqrt(sum(TB[,3]))
   #print(paste("Weighted Mean:", WM))
   #print(paste("Weighted Sd:", WS))
   #print(paste("df:", DF))
@@ -77,6 +85,10 @@ Hc=2.81
 
 
 GROUP_exel = "../../Video_list.xlsx"
+if (!file.exists(GROUP_exel)) {
+  message("Skipping Nst_dist_all: ", GROUP_exel, " not found (optional for group comparison)")
+  quit(save = "no", status = 0)
+}
 group_TB <- read_xlsx(GROUP_exel)
 Group_lt <- unique(group_TB$Group)
 Pair_TB <- as.data.frame(combn(Group_lt , 2))

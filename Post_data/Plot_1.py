@@ -3,6 +3,7 @@ import sys
 sys.path.sort()
 
 import os, argparse
+import subprocess
 import pandas as pd
 import seaborn as sns
 from pathlib import Path
@@ -32,8 +33,8 @@ def Plot_general(ID):
       os.makedirs(PATH)
 
     fig, ax = plt.subplots(figsize=(10,6))
-    sns.boxplot(data = BT, x="Fly_s", y = "Nst_dist", palette="Paired")
-    ax.set_xticklabels(ax.get_xticklabels(),rotation = 90)
+    sns.boxplot(data=BT, x="Fly_s", y="Nst_dist", hue="Fly_s", palette="Paired", legend=False)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha="right")
     ax.set_title(ID)
     fig.savefig(PATH+ID+".png")
     F = open(SELF+"/R/Nst_dist.R").read()
@@ -47,11 +48,9 @@ def Plot_general(ID):
     f = open(PATH+"Nst_dist_all"+".R", 'w')
     f.write(F)
     f.close()
-    # Change the workind directory
-    os.chdir(PATH)
-    os.system("Rscript "+ID+".R")
-    # back to origin directory
-    os.chdir("../../")
+    ret = subprocess.run(["Rscript", ID + ".R"], cwd=PATH, capture_output=True, text=True)
+    if ret.returncode != 0:
+        print("(R warning) %s: %s" % (ID + ".R", ret.stderr[:500] if ret.stderr else ret.stdout[:500]))
     ## Nearst Number
     PATH = "Video_post/Nearst_num/"
     if not os.path.exists(PATH):
@@ -59,8 +58,8 @@ def Plot_general(ID):
       os.makedirs(PATH)
 
     fig, ax = plt.subplots(figsize=(10,6))
-    sns.boxplot(data = BT, x="Fly_s", y = "Nst_num", palette="Paired")
-    ax.set_xticklabels(ax.get_xticklabels(),rotation = 90)
+    sns.boxplot(data=BT, x="Fly_s", y="Nst_num", hue="Fly_s", palette="Paired", legend=False)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha="right")
     ax.set_title(ID)
     fig.savefig(PATH+ID+".png")
     F = open(SELF+"/R/Nst_dist.R").read()
@@ -74,10 +73,9 @@ def Plot_general(ID):
     f = open(PATH+"Nst_num_all"+".R", 'w')
     f.write(F)
     f.close()
-    # Change the workind directory
-    os.chdir(PATH)
-    os.system("Rscript "+ID+".R")
-    os.chdir("../../")
+    ret = subprocess.run(["Rscript", ID + ".R"], cwd=PATH, capture_output=True, text=True)
+    if ret.returncode != 0:
+        print("(R warning) %s: %s" % (ID + ".R", ret.stderr[:500] if ret.stderr else ret.stdout[:500]))
     ## Speed
     PATH = "Video_post/mm_S/"
 
@@ -86,8 +84,8 @@ def Plot_general(ID):
       os.makedirs(PATH)
 
     fig, ax = plt.subplots(figsize=(10,6))
-    sns.boxplot(data = BT, x="Fly_s", y = "mm/s", palette="Paired")
-    ax.set_xticklabels(ax.get_xticklabels(),rotation = 90)
+    sns.boxplot(data=BT, x="Fly_s", y="mm/s", hue="Fly_s", palette="Paired", legend=False)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha="right")
     ax.set_title(ID)
     fig.savefig(PATH+ID+".png")
 
@@ -103,10 +101,9 @@ def Plot_general(ID):
     f.write(F)
     f.close()
 
-    # Change the workind directory
-    os.chdir(PATH)
-    os.system("Rscript "+ID+".R")
-    os.chdir("../../")
+    ret = subprocess.run(["Rscript", ID + ".R"], cwd=PATH, capture_output=True, text=True)
+    if ret.returncode != 0:
+        print("(R warning) %s: %s" % (ID + ".R", ret.stderr[:500] if ret.stderr else ret.stdout[:500]))
 
     ### Behaviro
     PATH = "Video_post/Bhav/"
@@ -116,11 +113,11 @@ def Plot_general(ID):
       os.makedirs(PATH)
 
     N_row = len(BT.Fly_s.unique())
-    fig, ax = plt.subplots(figsize=(15,  N_row))
+    fig, ax = plt.subplots(figsize=(15, N_row))
     Num = 0
     for Fly_id in BT.Fly_s.unique():
         Num += 1
-        plt.subplot(N_row,1,Num)
+        ax_sub = fig.add_subplot(N_row, 1, Num)
         TMP = BT[BT.Fly_s==Fly_id]
         TMP1 = TMP[TMP.Grooming!=0]
         sns.rugplot(data=TMP1, x="Frame", y= 0,  height=1, alpha=ALPHA, color ="black")
@@ -145,11 +142,9 @@ def Plot_general(ID):
     f.write(F)
     f.close()
 
-    # Change the workind directory
-    os.chdir(PATH)
-    os.system("Rscript "+ID+".R")
-    os.chdir("../../")
-
+    ret = subprocess.run(["Rscript", ID + ".R"], cwd=PATH, capture_output=True, text=True)
+    if ret.returncode != 0:
+        print("(R warning) %s: %s" % (ID + ".R", ret.stderr[:500] if ret.stderr else ret.stdout[:500]))
 
     ### Move
     PATH = "Video_post/Move/"
@@ -159,13 +154,13 @@ def Plot_general(ID):
       os.makedirs(PATH)
 
     N_row = len(BT.Fly_s.unique())
-    fig, ax = plt.subplots(figsize=(15,  N_row))
+    fig, ax = plt.subplots(figsize=(15, N_row))
     Num = 0
     for Fly_id in BT.Fly_s.unique():
         Num += 1
-        plt.subplot(N_row,1,Num)
+        ax_sub = fig.add_subplot(N_row, 1, Num)
         TMP = BT[BT.Fly_s==Fly_id]
-        sns.rugplot(data=TMP, x="Frame", y= 0, hue="Move", height=1, alpha=ALPHA, palette="tab10").set(xlim=(min(BT.Frame),max(BT.Frame)))
+        sns.rugplot(data=TMP, x="Frame", y=0, hue="Move", height=1, alpha=ALPHA, palette="tab10").set(xlim=(min(BT.Frame), max(BT.Frame)))
         TMP1 = TMP[TMP.Hold!=0]
         sns.rugplot().set_ylabel(Fly_id)
 
@@ -184,10 +179,9 @@ def Plot_general(ID):
     f.write(F)
     f.close()
 
-    # Change the workind directory
-    os.chdir(PATH)
-    os.system("Rscript "+ID+".R")
-    os.chdir("../../")
+    ret = subprocess.run(["Rscript", ID + ".R"], cwd=PATH, capture_output=True, text=True)
+    if ret.returncode != 0:
+        print("(R warning) %s: %s" % (ID + ".R", ret.stderr[:500] if ret.stderr else ret.stdout[:500]))
 
     ### Motion
     PATH = "Video_post/Motion/"
@@ -197,13 +191,13 @@ def Plot_general(ID):
       os.makedirs(PATH)
 
     N_row = len(BT.Fly_s.unique())
-    fig, ax = plt.subplots(figsize=(15,  N_row))
+    fig, ax = plt.subplots(figsize=(15, N_row))
     Num = 0
     for Fly_id in BT.Fly_s.unique():
         Num += 1
-        plt.subplot(N_row,1,Num)
+        ax_sub = fig.add_subplot(N_row, 1, Num)
         TMP = BT[BT.Fly_s==Fly_id]
-        sns.rugplot(data=TMP, x="Frame", y= 0, hue="Motion", height=1, alpha=ALPHA, palette="tab10").set(xlim=(min(BT.Frame),max(BT.Frame)))
+        sns.rugplot(data=TMP, x="Frame", y=0, hue="Motion", height=1, alpha=ALPHA, palette="tab10").set(xlim=(min(BT.Frame), max(BT.Frame)))
         TMP1 = TMP[TMP.Hold!=0]
         sns.rugplot().set_ylabel(Fly_id)
 
@@ -222,48 +216,28 @@ def Plot_general(ID):
     f.write(F)
     f.close()
 
-    # Change the workind directory
-    os.chdir(PATH)
-    os.system("Rscript "+ID+".R")
-    os.chdir("../../")
+    ret = subprocess.run(["Rscript", ID + ".R"], cwd=PATH, capture_output=True, text=True)
+    if ret.returncode != 0:
+        print("(R warning) %s: %s" % (ID + ".R", ret.stderr[:500] if ret.stderr else ret.stdout[:500]))
+
+def _run_r(cwd, script, label=None):
+    ret = subprocess.run(["Rscript", script], cwd=cwd, capture_output=True, text=True)
+    if ret.returncode != 0:
+        print("(R warning) %s: %s" % (label or script, (ret.stderr or ret.stdout or "")[:500]))
+
 def Plot_comp():
     ## Nearst Distance
-    PATH = "Video_post/Nearst_dist/"
-    os.chdir(PATH)
-    os.system("Rscript Nst_dist_all.R")
-    os.chdir("../../")
-
+    _run_r("Video_post/Nearst_dist/", "Nst_dist_all.R", "Nst_dist_all.R")
     ## Nearst Number
-    PATH = "Video_post/Nearst_num/"
-    os.chdir(PATH)
-    os.system("Rscript Nst_num_all.R")
-    os.chdir("../../")
-
+    _run_r("Video_post/Nearst_num/", "Nst_num_all.R", "Nst_num_all.R")
     ## Speed
-    PATH = "Video_post/mm_S/"
-    os.chdir(PATH)
-    os.system("Rscript Speed_all.R")
-    os.chdir("../../")
-
-
+    _run_r("Video_post/mm_S/", "Speed_all.R", "Speed_all.R")
     ### Behaviro
-    PATH = "Video_post/Bhav/"
-    os.chdir(PATH)
-    os.system("Rscript Behav_count_all.R")
-    os.chdir("../../")
-
-
+    _run_r("Video_post/Bhav/", "Behav_count_all.R", "Behav_count_all.R")
     ### Move
-    PATH = "Video_post/Move/"
-    os.chdir(PATH)
-    os.system("Rscript Move_count_all.R")
-    os.chdir("../../")
-
+    _run_r("Video_post/Move/", "Move_count_all.R", "Move_count_all.R")
     ### Motion
-    PATH = "Video_post/Motion/"
-    os.chdir(PATH)
-    os.system("Rscript Motion_count_all.R")
-    os.chdir("../../")
+    _run_r("Video_post/Motion/", "Motion_count_all.R", "Motion_count_all.R")
 
 def multicore(Pool=Process):
   pool = mp.Pool(processes=Pool)

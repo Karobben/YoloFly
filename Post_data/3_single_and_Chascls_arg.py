@@ -302,12 +302,14 @@ def Window_Mix(tmp, Cut_th=0.6):
 
 def Window_sum(tmp, Cut_th=0.6):
     SUM = pd.DataFrame(tmp.value_counts())
-    if len(SUM) ==1:
+    if len(SUM) == 1:
         return SUM.index[0]
-    elif SUM.iloc[0,0]>SUM.iloc[1,0]:
+    # SUM has one column (counts); column name may be 0 or 'count' depending on pandas
+    total = SUM.iloc[:, 0].sum()
+    if SUM.iloc[0, 0] > SUM.iloc[1, 0]:
         return SUM.index[0]
-    elif (SUM.iloc[0,0] + SUM.iloc[1,0])/ SUM.Be_sum.sum()>=Cut_th:
-        return "Mix_" + SUM.index[0]+"_"+SUM.index[1]
+    elif total > 0 and (SUM.iloc[0, 0] + SUM.iloc[1, 0]) / total >= Cut_th:
+        return "Mix_" + SUM.index[0] + "_" + SUM.index[1]
     else:
         return "NA"
 

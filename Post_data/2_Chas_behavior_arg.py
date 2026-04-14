@@ -597,6 +597,29 @@ def Ch_table_descibe(video_id, cls=3):
 
 Fly_dic = {}
 
+# Validate inputs before running
+if Frame_start >= Frame_end:
+    raise ValueError(
+        f"frame_start ({Frame_start}) must be less than frame_end ({Frame_end}). "
+        "Use -fs for first frame and -fe for last frame (e.g. -fs 39 -fe 822)."
+    )
+csv_path = os.path.join(Raw_file, [i for i in Raw_list if video_id in i and ".csv" in i][0])
+json_path = os.path.join(Raw_file, [i for i in Raw_list if video_id in i and ".json" in i][0])
+single_fly_path = os.path.join("Video_post", f"{video_id}_{Frame_start}_{Frame_end}.csv")
+if not os.path.exists(csv_path):
+    raise FileNotFoundError(f"Detection CSV not found: {csv_path}. Run detection with --bh-count first.")
+if os.path.getsize(csv_path) == 0:
+    raise ValueError(
+        f"Detection CSV is empty: {csv_path}. Run detection with --bh-count and --tar-track (and optional --head-bind) on this video first."
+    )
+if not os.path.exists(json_path) or os.path.getsize(json_path) == 0:
+    raise ValueError(f"Tracking JSON missing or empty: {json_path}. Run detection with --tar-track first.")
+if not os.path.exists(single_fly_path):
+    raise FileNotFoundError(
+        f"Single-fly table not found: {single_fly_path}. Run step 1 first: "
+        f"1_single_fly_run_arg.py -i {video_id} -fs {Frame_start} -fe {Frame_end} -pp {Len_plate_p} -pm {Len_plate_m}"
+    )
+
 Chas_TB = Ch_table_descibe(video_id)
 # remove accend duplications
 Chas_TB = Chas_TB[Chas_TB[[0,"Fs"]].duplicated()==False]

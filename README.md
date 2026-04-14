@@ -133,3 +133,41 @@ If you have more than 1 Platte in a video, we can plot the position for each fly
 # plot the position of the fly from each video to check switch betw
 python Post_data/QC.py
 ```
+
+### Detection class labels
+
+The YOLO model outputs the following classes. Each row in a detection CSV (`csv/*.csv`) is:
+`Frame  class  x_center  y_center  width  height` (all space-separated, coordinates normalized 0–1).
+
+| Class | Label       | Description                                                                 | Typical box size (normalized) |
+|-------|-------------|-----------------------------------------------------------------------------|-------------------------------|
+| 0     | **body**    | Entire fly body — the main detection used for tracking and counting.        | w ≈ 0.066, h ≈ 0.079         |
+| 1     | **head**    | Fly head only — small box used for head-binding and orientation estimation.  | w ≈ 0.017, h ≈ 0.019         |
+| 2     | **grooming**| Fly performing grooming behaviour.                                          | —                             |
+| 3     | **chasing** | Chasing interaction between two flies.                                      | —                             |
+| 4     | **flapping**| Wing-flapping / singing behaviour.                                          | —                             |
+| 5     | **holding** | Holding / mounting interaction.                                             | —                             |
+
+> **cls 0 is ~17× larger in area than cls 1.** cls 0 covers the whole body; cls 1 covers only the head.
+
+---
+
+### Video_list.csv format (post-processing pipeline)
+
+`Video_list.csv` is a **tab-separated** table with **no header**. Each line describes one video and one frame range:
+
+| Column | Name            | Description                                                                                 |
+|--------|-----------------|---------------------------------------------------------------------------------------------|
+| 1      | `video_id`      | Identifier used in detection results and `Video_post` filenames; also the `-id` argument.  |
+| 2      | `petri_pixel`   | Plate diameter (or relevant length) in **pixels**.                                         |
+| 3      | `petri_mm`      | Same plate length in **millimeters**.                                                      |
+| 4      | `frame_start`   | First frame index (**inclusive**) for this segment.                                        |
+| 5      | `frame_end`     | Last frame index (**exclusive**) for this segment.                                         |
+| 6      | `num_flies`     | Expected number of flies in the arena (used by analysis/QA tools).                         |
+| 7      | `abs_path`      | Absolute path to the corresponding video file.                                             |
+
+Example line (single tab between columns, no header row):
+
+```text
+adf6254_Movie_S3.mp4	1080	95	3000	17900	13	/mnt/Data/Videos/adf6254_Movie_S3.mp4
+```

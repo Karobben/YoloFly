@@ -105,6 +105,10 @@ CMP_TB <- data.frame(Color, Behavior)
 
 
 GROUP_exel = "../../Video_list.xlsx"
+if (!file.exists(GROUP_exel)) {
+  message("Skipping: ", GROUP_exel, " not found (optional for group comparison)")
+  quit(save = "no", status = 0)
+}
 group_TB <- read_xlsx(GROUP_exel)
 Group_lt <- unique(group_TB$Group)
 Pair_TB <- as.data.frame(combn(Group_lt , 2))

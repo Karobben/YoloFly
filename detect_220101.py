@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 import cv2, json
 import numpy as np
+from tqdm import tqdm
 import torch
 import torch.backends.cudnn as cudnn
 
@@ -74,7 +75,9 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         tracks_show = False,
         path_ink = False,
         head_bind = False,
-        num_fly = '0'
+        num_fly = '0',
+        debug = False,
+        quiet = False
         ):
     source = str(source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
@@ -174,9 +177,16 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         os.system("rm  csv/" + Video+"_"+str(tar_tr_start)+"_.json")
         Trac_out = open("csv/" + Video+"_"+str(tar_tr_start)+"_.json", "a")
 
+    # Progress bar for single-video processing (frame-based)
+    pbar = None
+    if not webcam and dataset.nf == 1 and getattr(dataset, 'video_flag', [False])[0]:
+        total_frames = getattr(dataset, 'frames', 0) or 0
+        if total_frames > 0:
+            pbar = tqdm(total=total_frames, unit='frame', desc='Video', dynamic_ncols=True)
 
     for path, img, im0s, vid_cap, s in dataset:
-
+        if pbar is not None:
+            pbar.update(1)
         Num_frame += 1 ## Karobben - -
         t1 = time_sync()
         if onnx:
@@ -251,7 +261,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
             s += '%gx%g ' % img.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
-            print("shape", im0.shape, frame)
+            #print("shape", im0.shape, frame)
             imc = im0.copy() if save_crop else im0  # for save_crop
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
 
@@ -287,7 +297,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                             save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
             # Print time (inference-only)
-            LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
+            if not quiet:
+                LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
 
             # Stream results
             im0 = annotator.result()
@@ -372,7 +383,10 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                             from utils.Head_bind import head_match
                             head_bind = head_match()
                             head_bind.main(FLY_matrix, Num_frame, TB_head)
-                            print("Head Match:", head_bind.MATCH_result)
+                            if debug:
+                                print("Head Match:", head_bind.MATCH_result)
+                            else:
+                                pass
                             for fly in FLY_matrix[Num_frame].keys():
                                 #print(int(head_bind.MATCH_result[fly]))
                                 #print(TB_head)
@@ -381,7 +395,10 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                             dic_ID = list(FLY_matrix.keys())[-1]
                             tmp = {dic_ID:FLY_matrix[dic_ID]}
                             FLY_matrix_tmp_str = json.dumps(tmp) +";"
-                            print(FLY_matrix_tmp_str)
+                            if debug:
+                                print(FLY_matrix_tmp_str)
+                            else:
+                                pass
                             # update the tar_tr_start
                             os.system("rm  csv/" + Video+"_"+str(tar_tr_start)+"_.json")
                             Trac_out = open("csv/" + Video+"_"+str(tar_tr_start)+"_.json", "a")
@@ -389,12 +406,19 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                         except:
                             os.system("rm  csv/" + Video+"_"+str(tar_tr_start)+"_.json")
                             tar_tr_start += 1
-                            print("head bind fail, went to next frame:", Num_frame)
+                            if debug:
+                                print("head bind fail, went to next frame:", Num_frame)
+                            else:
+                                pass
                     else:
                         dic_ID = list(FLY_matrix.keys())[-1]
                         tmp = {dic_ID:FLY_matrix[dic_ID]}
                         FLY_matrix_tmp_str = json.dumps(tmp) +";"
-                        print(FLY_matrix_tmp_str)
+                        #if debug mode
+                        if debug:
+                            print(FLY_matrix_tmp_str)
+                        else:
+                            pass
                         Trac_out.write(FLY_matrix_tmp_str)
 
                 if Num_frame > tar_tr_start:
@@ -409,17 +433,10 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     if head_bind:
                         from utils.Head_bind import head_match
                         head_bind = head_match()
-                        print("\n\n\n\n\n\n\n\n")
-                        print("Fly Matrix; Fly Matrix; Fly Matrix")
-                        print(FLY_matrix)
-                        print("\n")
-                        print(Num_frame)
-                        print("\n")
-                        print(TB_head)
+
 
                         head_bind.main(FLY_matrix, Num_frame, TB_head)
-                        print(TB[TB[0]==1])
-                        print(head_bind.MATCH_result)
+
                         for fly in FLY_matrix[Num_frame].keys():
                             try:
                                 FLY_matrix[Num_frame][fly].update({"head":list(TB_head.iloc[int(head_bind.MATCH_result[fly]),1:])})
@@ -435,11 +452,9 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     dic_ID = list(FLY_matrix.keys())[-1]
                     tmp = {dic_ID:FLY_matrix[dic_ID]}
                     FLY_matrix_tmp_str = json.dumps(tmp) +";"
-                    print("Frame in chach",len(FLY_matrix))
+                    #print("Frame in chach",len(FLY_matrix))
                     Trac_out.write(FLY_matrix_tmp_str)
 
-                    print("result from nearst align:")
-                    print("\n\nnearest match, donw\n\n",)
                     FLY_list = [i for i in list(FLY_matrix[Num_frame].keys())]
                     cv2.putText(im0, str(len(FLY_list)) ,(100, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (100, 200, 200), 1)
                     cv2.putText(im0, str(round(Num_frame)) ,(100, 130), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (100, 200, 200), 1)
@@ -563,6 +578,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                 INK_Result, INK_mv_index, frame_tmp = INK_all.Result, INK_all.mv_index, INK_all.frame_tmp
                 #print(INK_Result,"\n\n", INK_mv_index,"\n\n", frame_tmp)
 
+    if pbar is not None:
+        pbar.close()
     # karobben result:
     if path_ink:
         ink_TB = pd.DataFrame(INK_Result)
@@ -620,6 +637,8 @@ def parse_opt():
     parser.add_argument('--path-ink', action='store_true', help='a csv file for the plot of path ink')
     parser.add_argument('--head-bind', action='store_true', help='bind the head we detected')
     parser.add_argument('--num-fly', default= 0,  type=int, help='The number of expected flies in the video')
+    parser.add_argument('--debug', action='store_true', help='debug mode', default=False)
+    parser.add_argument('--quiet', action='store_true', help='suppress per-frame progress')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(FILE.stem, opt)

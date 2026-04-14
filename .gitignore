@@ -38,7 +38,6 @@ csv_model_600_l
 csv_mode*
 test*
 *.ipynb
-*.pt
 
 results*.csv
 
@@ -53,8 +52,6 @@ VOC/
 !targets*.mat
 
 # Neural Network weights -----------------------------------------------------------------------------------------------
-*.weights
-*.pt
 *.pb
 *.onnx
 *.mlmodel

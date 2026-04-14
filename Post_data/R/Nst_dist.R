@@ -19,8 +19,8 @@ Wei_Mean <- function(TB){
   }
   WM = W_mean_t1/W_mean_t2
   WS = sqrt(1/W_mean_t2)
-  DF = sum(TB[3]) - nrow(TB)
-  SE = WS/sqrt(sum(TB[3]))
+  DF = sum(TB[,3]) - nrow(TB)
+  SE = WS/sqrt(sum(TB[,3]))
   #print(paste("Weighted Mean:", WM))
   #print(paste("Weighted Sd:", WS))
   #print(paste("df:", DF))
@@ -50,24 +50,26 @@ H=2.4
 NAME = str_replace(FILE, "csv", "svg")
 NAME2 = str_replace(FILE, "csv", "png")
 TB <- read.csv(paste("..", FILE, sep= "/"))[TB_clist]
+TB$Fly_s <- factor(TB$Fly_s)
+y_col <- names(TB)[2]
 
-if(length(levels(TB[[1]]))>12){
-    CMP = head(rep(CMP, round(length(levels(TB[[1]]))/12)+1), length(levels(TB[[1]])))
+if(length(levels(TB$Fly_s))>12){
+    CMP = head(rep(CMP, round(length(levels(TB$Fly_s))/12)+1), length(levels(TB$Fly_s)))
 }
 
-P <- ggplot(TB, aes(Fly_s, TB[[2]])) + geom_boxplot() + theme_bw() + ylab(label = TYPE)
+P <- ggplot(TB, aes(x=Fly_s, y=.data[[y_col]])) + geom_boxplot() + theme_bw() + ylab(label = TYPE)
 ggsave(paste("Nnst",NAME,sep="_" ), w= W, h = H)
 ggsave(paste("Nnst",NAME2,sep="_" ), w= W, h = H)
 
-Pc<- ggplot(TB, aes(Fly_s, TB[[2]], fill=Fly_s)) + geom_boxplot() + theme_bw() + scale_fill_manual(values = CMP) + ylab(label = TYPE)
+Pc<- ggplot(TB, aes(x=Fly_s, y=.data[[y_col]], fill=Fly_s)) + geom_boxplot() + theme_bw() + scale_fill_manual(values = CMP) + ylab(label = TYPE)
 ggsave(paste("Nnst_c",NAME,sep="_" ), w= W, h = H)
 ggsave(paste("Nnst_c",NAME2,sep="_" ), w= W, h = H)
 
-TB$Frame<- rep(c(1:length(which(TB$Fly_s==TB$Fly_s[1]))), length(levels(TB$Fly_s)))
+# Frame: 1,2,3,... per fly (robust when fly order or counts vary)
+TB$Frame <- ave(seq_len(nrow(TB)), TB$Fly_s, FUN=seq_along)
 TB_W <- reshape(TB, idvar = "Fly_s", timevar =  "Frame", direction = "wide")
-row.names(TB_W) = TB_W[[1]]
+row.names(TB_W) = TB_W[,1]
 TB_W <- TB_W[-1]
-
 
 TB_sd = data.frame(Mean = apply(TB_W, 1, mean), Sd = apply(TB_W, 1, sd), N = apply(TB_W, 1, length))
 
