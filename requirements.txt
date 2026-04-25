@@ -21,6 +21,7 @@ tensorboard>=2.4.1
 # Plotting ------------------------------------
 pandas>=1.3.4
 seaborn>=0.11.2
+Flask>=2.3.0
 
 # Export --------------------------------------
 # coremltools>=4.1  # CoreML export

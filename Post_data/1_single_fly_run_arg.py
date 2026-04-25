@@ -195,13 +195,6 @@ def video2tb(fly_id, Video_tb):
     Speed["Pre_motion"]=None
     Speed["Pre_motion"][2:]=Speed["Motion"][:-2]
     #inheriate motions 2 frame ago
-
-    #Speed.to_csv("test_speed.csv")
-
-    # Fit the behaviors
-
-    # Gromming box by nearst points
-
     # fly_box
     '''
     Gro_tmp = [i for i in CSV_matrix[["Frame","x", "y"]][CSV_matrix["class"]==2].to_numpy()][0]#* np.array([1,2])
@@ -216,8 +209,9 @@ def video2tb(fly_id, Video_tb):
         ((np.array(Gro_tmp[1:]) - \
               np.array([np.array(Fly_dic[str(int(Gro_tmp[0]))][ii]["body"][:2]) \
                         for  ii in  Fly_dic[str(int(Gro_tmp[0]))].keys()])
-         )**2).sum(axis=1).argmin()] for Gro_tmp in CSV_matrix[["Frame","x", "y"]][CSV_matrix["class"]==2].to_numpy()]
+         )**2).sum(axis=1).argmin()] for Gro_tmp in CSV_matrix[["Frame","x", "y"]][CSV_matrix["class"]==2].to_numpy() if str(int(Gro_tmp[0])) in Fly_dic.keys()]
     Grooming_TB = CSV_matrix[["Frame"]][CSV_matrix["class"]==2]
+    Grooming_TB = Grooming_TB[Grooming_TB["Frame"].astype(str).isin(Fly_dic.keys())]
     Grooming_TB["fly"] = Grooming_list
     #Grooming_TB.to_csv("test_grom.csv")
 
@@ -225,14 +219,16 @@ def video2tb(fly_id, Video_tb):
         ((np.array(Sin_tmp[1:]) - \
               np.array([np.array(Fly_dic[str(int(Sin_tmp[0]))][ii]["body"][:2]) \
                         for  ii in  Fly_dic[str(int(Sin_tmp[0]))].keys()])
-         )**2).sum(axis=1).argmin()] for Sin_tmp in CSV_matrix[["Frame","x", "y"]][CSV_matrix["class"]==4].to_numpy()]
+         )**2).sum(axis=1).argmin()] for Sin_tmp in CSV_matrix[["Frame","x", "y"]][CSV_matrix["class"]==4].to_numpy() if str(int(Sin_tmp[0])) in Fly_dic.keys()]
     Singing_TB = CSV_matrix[["Frame"]][CSV_matrix["class"]==4]
+    Singing_TB = Singing_TB[Singing_TB["Frame"].astype(str).isin(Fly_dic.keys())]
     Singing_TB["fly"] = Singing_list
     #Singing_TB.to_csv("test_sing.csv")
 
     # Chasing and Hold
     # Chasing
     Chasing_TB = CSV_matrix[CSV_matrix['class']==3]
+    Chasing_TB = Chasing_TB[Chasing_TB["Frame"].astype(str).isin(Fly_dic.keys())]
     # intersect with target
 
     Chasing_list = np.array([R_in_area(Chasing_TB.iloc[i,2:].to_numpy(),
@@ -240,8 +236,10 @@ def video2tb(fly_id, Video_tb):
        for i in range(len(Chasing_TB))])
     Chasing_flyid = pd.DataFrame(Chasing_TB.Frame[Chasing_list >= .85].unique(), columns=["Frame"])
     Chasing_flyid["Chasing"]=1
+
     # Hold
     Hold_TB = CSV_matrix[CSV_matrix['class']==5]
+    Hold_TB = Hold_TB[Hold_TB["Frame"].astype(str).isin(Fly_dic.keys())]
     # intersect with target
 
     Hold_list = np.array([R_in_area(Hold_TB.iloc[i,2:].to_numpy(),
@@ -308,13 +306,25 @@ Fly_dic = {}
 if len(Fly_dic)==0:
     Fly_dic = json.loads(open(Raw_file +"/"+Json_result, "r").read())
 CSV_matrix = pd.read_csv(Raw_file +"/"+CSV_result, sep=" ", header=None)
-CSV_matrix.columns= ["Frame", "class","x", "y","width", "hight"]
+if CSV_matrix.shape[1] >= 7:
+    CSV_matrix = CSV_matrix.iloc[:, :7]
+    CSV_matrix.columns = ["Frame", "class", "x", "y", "width", "hight", "conf"]
+else:
+    CSV_matrix = CSV_matrix.iloc[:, :6]
+    CSV_matrix.columns = ["Frame", "class", "x", "y", "width", "hight"]
 CSV_matrix = CSV_matrix[CSV_matrix['Frame'].isin(range(Frame_start, Frame_end))]
 # Prepare a vacum data frame
 Video_tb = pd.DataFrame()
 
+# check if the Frame_start and Frame_end in the json file, if not, use the first and last frame in the json file
+if int(list(Fly_dic.keys())[0]) > Frame_start:
+    Frame_start = int(list(Fly_dic.keys())[0])
+if int(list(Fly_dic.keys())[-1]) < Frame_end:
+    Frame_end = int(list(Fly_dic.keys())[-1])
+
 for fly_id in Fly_dic[str(Frame_start)].keys():
     Video_tb = video2tb(fly_id, Video_tb)
+
 Video_tb["Video"] = video_id
 Video_tb.to_csv("Video_post/" + video_id + "_"+str(Frame_start)+ "_" + str(Frame_end) +".csv")
 #All_videos = pd.concat([All_videos,Video_tb])

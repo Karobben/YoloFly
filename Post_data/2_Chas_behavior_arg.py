@@ -13,6 +13,7 @@ from numpy.linalg import norm
 import seaborn as sns
 from itertools import chain, combinations
 from scipy.spatial import distance
+from rich.progress import track
 
 
 import argparse
@@ -395,14 +396,25 @@ def pos_C(Fs, Ft, _FLY_L_pix, Frame):
         return [[Frame] + [i for i  in TMP]]
 
 def Chase_get(Fly_dic, ch_frame):
-    Result  = []
-    CHase_list = (ch_frame.Frame.astype(str) + "_" + ch_frame.Fly_s).to_list()
+    Result = []
     _FLY_L_pix = 2.5 / _Scale
-    #AA = [[[ Result.append(pos_C(Fs,Ft,_FLY_L_pix,Frame)) for Ft in Fly_dic[Frame].keys() if Ft !=Fs and str(Frame) + "_" + Fs in CHase_list] for Fs in Fly_dic[Frame].keys()] for  Frame in Fly_dic.keys()]
+    # Only (Frame, Fly_s) rows that appear in behavior CSV — avoids scanning every fly in every frame.
+    uniq_pairs = ch_frame[["Frame", "Fly_s"]].drop_duplicates()
+    for fr, fs in track(
+        uniq_pairs.itertuples(index=False, name=None),
+        total=len(uniq_pairs),
+        description="Chase_get",
+    ):
+        frame_key = str(fr)
+        fs_key = str(fs)
+        frame_flys = Fly_dic.get(frame_key)
+        if frame_flys is None or fs_key not in frame_flys:
+            continue
+        for Ft in frame_flys:
+            if Ft != fs_key:
+                Result.append(pos_C(fs_key, Ft, _FLY_L_pix, frame_key))
 
-
-    AA = [[[ Result.append(pos_C(Fs,Ft,_FLY_L_pix,Frame)) for Ft in Fly_dic[Frame].keys() if Ft !=Fs and str(Frame) + "_" + Fs in CHase_list] for Fs in Fly_dic[Frame].keys()] for  Frame in Fly_dic.keys()]
-
+    # AA = [[[ Result.append(pos_C(Fs,Ft,_FLY_L_pix,Frame)) for Ft in Fly_dic[Frame].keys() if Ft !=Fs and str(Frame) + "_" + Fs in CHase_list] for Fs in Fly_dic[Frame].keys()] for  Frame in Fly_dic.keys()]
     TB = pd.DataFrame([i[0] for i in Result if i !=None], columns=[0, 'Fs', 'Ft', 'Scan_pos', 'T_side', 'Head_to', 'Direction', 'Angle'])
     return TB
 
@@ -422,33 +434,40 @@ Chase_gap = 15
 ######################################
 
 def Ch_table_descibe(video_id, cls=3):
+    # pos_calcu / pos_move read module-level Fly_dic; keep it in sync with loaded JSON.
+    global Fly_dic
 
     _FLY_L_pix = 2.5 / _Scale
 
     CSV_result = [i for i in Raw_list if video_id in i and ".csv" in i][0]
     Json_result = [i for i in Raw_list if video_id in i and ".json" in i][0]
     Json_list = open(Raw_file +"/"+Json_result, "r").read().split(";")[:-1]
-    [Fly_dic.update(json.loads(i)) for i in Json_list if int(list(json.loads(i).keys())[0])
-        >= Frame_start and int(list(json.loads(i).keys())[0])<= Frame_end]
+    Fly_dic = {}
+    for i in track(Json_list, 'scanning json...'):
+        if int(list(json.loads(i).keys())[0]) >= Frame_start and int(list(json.loads(i).keys())[0])<= Frame_end:
+            Fly_dic.update(json.loads(i))
+    # [Fly_dic.update(json.loads(i)) for i in Json_list if int(list(json.loads(i).keys())[0])
+    #     >= Frame_start and int(list(json.loads(i).keys())[0])<= Frame_end]
 
     CSV_matrix = pd.read_csv(Raw_file +"/"+CSV_result, sep=" ", header=None)
-    CSV_matrix.columns= ["Frame", "class","x", "y","width", "hight"]
+    if CSV_matrix.shape[1] >= 7:
+        CSV_matrix = CSV_matrix.iloc[:, :7]
+        CSV_matrix.columns = ["Frame", "class", "x", "y", "width", "hight", "conf"]
+    else:
+        CSV_matrix = CSV_matrix.iloc[:, :6]
+        CSV_matrix.columns = ["Frame", "class", "x", "y", "width", "hight"]
     CSV_matrix = CSV_matrix[CSV_matrix['Frame'].isin(range(Frame_start, Frame_end))]
     CSV_matrix[["x","width"]]= CSV_matrix[["x","width"]]*_pixel_X
     CSV_matrix[["y","hight"]]= CSV_matrix[["y","hight"]]*_pixel_Y
-
-
 
     ####################################################
     # Starting to summary the Chasing Events
     ####################################################
 
     Fly_bhv = pd.read_csv("Video_post/"+  video_id + "_"+str(Frame_start)+ "_" + str(Frame_end) +".csv", index_col=0)
-
     ch_frame  = pd.concat([Fly_bhv[['Frame', 'Fly_s', 'Grooming']], Fly_bhv[["Sing", "Chasing", "Hold"]].sum(1)], axis=1)
     ch_frame = ch_frame[ch_frame[0]!=0]
     ch_frame = ch_frame[ch_frame.Grooming==0]
-
 
     Chase_result = Chase_get(Fly_dic, ch_frame)
 
@@ -593,7 +612,6 @@ def Ch_table_descibe(video_id, cls=3):
     Chas_TB["Class"].iloc[[i for i in range(len(M_TB)) if M_TB.iloc[i] !=0]] = "Hold"
 
     return Chas_TB
-
 
 Fly_dic = {}
 

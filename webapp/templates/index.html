@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>detect_explore</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>detect_explore</h1>
+    <p>Single workspace: browse <code>runs/detect</code>, preview images/video frames, load/edit/save YOLO labels.</p>
+    <div class="tabs">
+      <button id="tabRuns" class="tab-btn active">Runs Label Editor</button>
+      <button id="tabCsv" class="tab-btn">CSV Explore</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="paneRuns">
+      <div class="field">
+        <label>Run</label>
+        <select id="runSelect"></select>
+        <button id="refreshRuns">Refresh runs</button>
+      </div>
+
+      <div class="field">
+        <label>Image in run</label>
+        <select id="imageSelect"></select>
+        <button id="openImage">Open image</button>
+      </div>
+
+      <div class="field">
+        <label>Video in run</label>
+        <select id="videoSelect"></select>
+        <div class="row">
+          <input id="frameInput" type="number" min="1" value="1" />
+          <button id="openFrame">Open frame</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Label path (relative to run)</label>
+        <input id="labelPath" type="text" placeholder="labels/xxx.txt" />
+        <div class="row">
+          <button id="loadLabel">Load label</button>
+          <button id="saveLabel">Save label</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Raw YOLO lines</label>
+        <textarea id="rawText" rows="10"></textarea>
+        <button id="applyRaw">Apply raw text</button>
+      </div>
+
+      <div class="field">
+        <label>Class visibility</label>
+        <div id="classFilters" class="class-filters"></div>
+      </div>
+
+      <div class="field">
+        <label>Loaded boxes (editable)</label>
+        <div id="boxList" class="box-list"></div>
+      </div>
+
+      <div class="field">
+        <label>Add box by drag</label>
+        <div class="row">
+          <input id="addClassInput" type="number" min="0" step="1" value="0" />
+          <button id="toggleAddMode">Add: OFF</button>
+        </div>
+        <small>Turn on Add mode, then drag on image to create a box of this class.</small>
+      </div>
+
+      <p id="status"></p>
+    </aside>
+    <aside id="paneCsv" class="hidden">
+      <div class="field">
+        <label>CSV file from csv/</label>
+        <select id="csvSelect"></select>
+        <div class="row">
+          <button id="refreshCsv">Refresh CSV list</button>
+          <button id="loadCsv">Load CSV</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Video path (absolute or project-relative)</label>
+        <input id="videoPathInput" type="text" placeholder="/home/.../video.mp4 or runs/detect/exp/video.mp4" />
+        <div class="row">
+          <input id="videoPathFrameInput" type="number" min="1" value="1" />
+          <button id="openVideoPathFrame">Open frame</button>
+        </div>
+        <div class="row3">
+          <button id="prevFrameBtn">Prev</button>
+          <input id="frameSlider" type="range" min="1" max="1" value="1" />
+          <button id="nextFrameBtn">Next</button>
+        </div>
+        <button id="playPauseBtn">Play</button>
+        <small id="videoInfoText">No video loaded.</small>
+      </div>
+
+      <div class="field">
+        <label>CSV preview</label>
+        <div id="csvPreview" class="csv-preview"></div>
+      </div>
+      <div class="field">
+        <label>CSV full-file stats</label>
+        <div id="csvFullStats" class="class-stats"></div>
+      </div>
+      <div class="field">
+        <label>Tracking JSON from csv/</label>
+        <select id="jsonSelect"></select>
+        <div class="row">
+          <button id="refreshJson">Refresh JSON list</button>
+          <button id="loadJson">Load JSON</button>
+        </div>
+        <label class="check-row">
+          <input id="showTracking" type="checkbox" checked />
+          Show body-head arrows
+        </label>
+        <label class="check-row">
+          <input id="showTrackIds" type="checkbox" checked />
+          Show fly IDs
+        </label>
+        <label class="check-row">
+          <input id="showTrackHistory" type="checkbox" />
+          Show fading previous tracks
+        </label>
+        <div class="row">
+          <label for="trackHistoryLen">Track frames</label>
+          <input id="trackHistoryLen" type="number" min="1" max="500" value="30" />
+        </div>
+        <small id="trackingInfoText">No tracking JSON loaded.</small>
+      </div>
+      <div class="field">
+        <label>Class visibility</label>
+        <div id="classFiltersCsv" class="class-filters"></div>
+      </div>
+      <div class="field">
+        <label>Loaded boxes (current frame, editable)</label>
+        <div id="boxListCsv" class="box-list"></div>
+      </div>
+      <div class="field">
+        <label>Add box by drag</label>
+        <div class="row">
+          <input id="addClassInputCsv" type="number" min="0" step="1" value="0" />
+          <button id="toggleAddModeCsv">Add: OFF</button>
+        </div>
+        <small>Turn on Add mode, then drag on image to create a box for current frame.</small>
+      </div>
+      <p id="csvStatus"></p>
+    </aside>
+
+    <section>
+      <div class="toolbar">
+        <button id="zoomOut">-</button>
+        <input id="zoomRange" type="range" min="10" max="400" value="100" />
+        <button id="zoomIn">+</button>
+        <span id="zoomText">100%</span>
+      </div>
+      <div class="field">
+        <label>Class statistics</label>
+        <div id="classStats" class="class-stats"></div>
+      </div>
+      <div id="mediaStage" class="media-stage">
+        <video id="videoPlayer" class="hidden" muted playsinline></video>
+        <canvas id="canvas"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
+

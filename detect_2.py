@@ -101,9 +101,12 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         head_bind = False,
         num_fly = '0',
         debug = False,
-        quiet = False
+        quiet = False,
+        snap_frame=None,  # None: full run; int (1-based): single video frame, save annotated PNG and stop
+        frame_skip=1,  # process one frame every N frames (quick screening)
         ):
     source = str(source)
+    frame_skip = max(1, int(frame_skip or 1))
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
         ('rtsp://', 'rtmp://', 'http://', 'https://'))
@@ -174,6 +177,20 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         bs = 1  # batch_size
     vid_path, vid_writer = [None] * bs, [None] * bs
 
+    # Single-frame snapshot: one 1-based video frame index (matches Num_frame in this script)
+    if snap_frame is not None:
+        if webcam:
+            raise ValueError('--snapshot-frame is only supported for file/dir video or image sources, not streams/webcam.')
+        if dataset.nf != 1 or not getattr(dataset, 'video_flag', [False])[0]:
+            raise ValueError('--snapshot-frame requires a single video file as --source.')
+        n_frames = int(getattr(dataset, 'frames', 0) or 0)
+        if n_frames <= 0:
+            raise ValueError('Could not read frame count for video; --snapshot-frame not supported.')
+        if snap_frame < 1 or snap_frame > n_frames:
+            raise ValueError(f'--snapshot-frame {snap_frame} out of range 1..{n_frames} for this video.')
+        if snap_frame > 1 and dataset.cap is not None:
+            dataset.cap.set(cv2.CAP_PROP_POS_FRAMES, snap_frame - 1)
+
     # Run inference
     if pt and device.type != 'cpu':
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
@@ -203,11 +220,11 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
     Video = source.split("/")[-1]
     csv_dir = Path("csv")
     csv_dir.mkdir(parents=True, exist_ok=True)
-    if bh_count:
-        csv_path = csv_dir / (Video + ".csv")
-        if csv_path.exists():
-            csv_path.unlink(missing_ok=True)
-        csv_buffer = []  # buffer and write once at end (faster)
+    csv_name = Video + (f"_Fskip_{frame_skip}" if frame_skip > 1 else "") + ".csv"
+    csv_path = csv_dir / csv_name
+    if csv_path.exists():
+        csv_path.unlink(missing_ok=True)
+    csv_buffer = []  # buffer and write once at end (faster)
     # Karobben: Tracking save
     if tar_track:
         json_path = csv_dir / (Video + "_" + str(tar_tr_start) + "_.json")
@@ -230,7 +247,12 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
     for path, img, im0s, vid_cap, s in frame_iter:
         if pbar is not None:
             pbar.update(1)
-        Num_frame += 1 ## Karobben - -
+        if snap_frame is not None:
+            Num_frame = snap_frame  # 1-based index for this decode (after optional cap seek)
+        else:
+            Num_frame += 1  ## Karobben - -
+        if snap_frame is None and frame_skip > 1 and (Num_frame - 1) % frame_skip != 0:
+            continue
         t1 = time_sync()
         if onnx:
             img = img.astype('float32')
@@ -286,6 +308,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             pred = apply_classifier(pred, modelc, img, im0s)
 
         # Process predictions
+        snapshot_done = False
         for i, det in enumerate(pred):  # per image
             seen += 1
             if webcam:  # batch_size >= 1
@@ -305,6 +328,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             #print("shape", im0.shape, frame)
             imc = im0.copy() if save_crop else im0  # for save_crop
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
+            Lable_Result = []
 
             if len(det):
                 # Rescale boxes from img_size to im0 size
@@ -316,14 +340,14 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 # Write results
-                Lable_Result = []
                 #print("\n\nLet's test\n\n")
                 #print(reversed(det))
                 for *xyxy, conf, cls in reversed(det):
                     #if save_txt:  # Write to file
                     xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                    line = (cls, *xywh, conf) if save_conf else (cls, *xywh)# label format
-                    label_tmp = [str(round(line[0].item()))] + [str(i) for i in line[1:]]
+                    # Always keep confidence in label rows saved to csv outputs.
+                    cls_id = int(round(cls.item()))
+                    label_tmp = [str(cls_id)] + [str(i) for i in xywh] + [str(float(conf.item()))]
                     Lable_Result.append(" ".join(label_tmp))
                     #print("line is here", label_tmp)
                     #with open(txt_path + '.txt', 'a') as f:
@@ -369,7 +393,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                         POS_re = ["3.5", (Box[0][0]+Box[0][2]/2),
                                 (Box[0][1]+Box[0][3]/2),
                                 (abs(Box[1][0]-Box[1][2])/2),
-                                (abs(Box[1][1]-Box[1][3])/2)
+                                (abs(Box[1][1]-Box[1][3])/2),
+                                "1.0"
                                 ]
                         POS_re = [str(i) for i in POS_re]
                         Lable_Result.append(" ".join(POS_re))
@@ -593,8 +618,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
 
-            if bh_count:
-                Lable_Result_2 = [str(Num_frame)+" "+i for i in Lable_Result]
+            Lable_Result_2 = [str(Num_frame)+" "+i for i in Lable_Result]
+            if Lable_Result_2:
                 csv_buffer.append("\n".join(Lable_Result_2) + "\n")
 
             if path_ink:
@@ -611,6 +636,27 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                 INK_Result, INK_mv_index, frame_tmp = INK_all.Result, INK_all.mv_index, INK_all.frame_tmp
                 #print(INK_Result,"\n\n", INK_mv_index,"\n\n", frame_tmp)
 
+            if snap_frame is not None:
+                snap_path = save_dir / f'{p.stem}_frame{snap_frame}_snapshot.png'
+                cv2.imwrite(str(snap_path), im0)
+                LOGGER.info(f'Snapshot saved to {snap_path}')
+                # Also save the raw frame without any drawn labels/boxes.
+                snap_raw_path = save_dir / f'{p.stem}_frame{snap_frame}_snapshot_raw.png'
+                cv2.imwrite(str(snap_raw_path), im0s)
+                LOGGER.info(f'Raw snapshot saved to {snap_raw_path}')
+                labels_dir = save_dir / 'labels'
+                labels_dir.mkdir(parents=True, exist_ok=True)
+                txt_snap = labels_dir / f'{p.stem}_frame{snap_frame}_snapshot.txt'
+                with open(txt_snap, 'w') as f:
+                    f.write('\n'.join(Lable_Result))
+                    if Lable_Result:
+                        f.write('\n')
+                LOGGER.info(f'Snapshot YOLO labels ({len(Lable_Result)} lines) saved to {txt_snap}')
+                snapshot_done = True
+
+        if snap_frame is not None and snapshot_done:
+            break
+
     if pbar is not None:
         pbar.close()
     # karobben result:
@@ -619,7 +665,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         ink_TB.to_csv( "csv/" + Video + "_ink.csv")
         ink_TB2 = pd.DataFrame(INK_mv_index)
         ink_TB2.to_csv("csv/" + Video + "_mv_index.csv")
-    if bh_count:
+    if csv_buffer:
         with open(csv_path, "w") as FF:
             FF.writelines(csv_buffer)
     if tar_track:
@@ -674,8 +720,28 @@ def parse_opt():
     parser.add_argument('--num-fly', default= 0,  type=int, help='The number of expected flies in the video')
     parser.add_argument('--debug', action='store_true', help='debug mode', default=False)
     parser.add_argument('--quiet', action='store_true', help='suppress per-frame progress')
+    parser.add_argument(
+        '--frame-skip',
+        type=int,
+        default=1,
+        help='Quick screening: process only one frame every N frames (default 1 = process all frames).',
+    )
+    parser.add_argument(
+        '--snapshot-frame',
+        nargs='?',
+        type=int,
+        const=1,
+        default=None,
+        metavar='N',
+        help='Single-frame mode (single video --source only): run detection on frame N only (1-based index; '
+             'omit N to use the first frame). Saves annotated PNG as <video>_frame<N>_snapshot.png and YOLO-format '
+             'labels/<video>_frame<N>_snapshot.txt under the run folder (class + norm xywh; add conf with --save-conf). Exits.',
+    )
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
+    # argparse stores MISSING when flag absent; nargs='?' with const uses None only when not given
+    opt.snap_frame = opt.snapshot_frame
+    del opt.snapshot_frame
     print_args(FILE.stem, opt)
     return opt
 

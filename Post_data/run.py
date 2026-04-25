@@ -21,6 +21,9 @@ import multiprocessing as mp
 Video_post = "Video_post"
 List = open("Video_list.csv").read().split("\n")[:-1]
 Video_list  = [i.split("\t")[0] for i in List]
+# Create the output directory if it doesn't exist
+if not os.path.exists(Video_post):
+    os.makedirs(Video_post)
 
 def _line_parts(i):
     return i.split("\t")

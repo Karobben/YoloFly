@@ -277,7 +277,12 @@ for i_index in range(len(Video_list)):
         >= Frame_start and int(list(json.loads(i).keys())[0])<= Frame_end]
 
     CSV_matrix = pd.read_csv(Raw_file +"/"+CSV_result, sep=" ", header=None)
-    CSV_matrix.columns= ["Frame", "class","x", "y","width", "hight"]
+    if CSV_matrix.shape[1] >= 7:
+        CSV_matrix = CSV_matrix.iloc[:, :7]
+        CSV_matrix.columns = ["Frame", "class", "x", "y", "width", "hight", "conf"]
+    else:
+        CSV_matrix = CSV_matrix.iloc[:, :6]
+        CSV_matrix.columns = ["Frame", "class", "x", "y", "width", "hight"]
     CSV_matrix = CSV_matrix[CSV_matrix['Frame'].isin(range(Frame_start, Frame_end))]
     # Prepare a vacum data frame
     Video_tb = pd.DataFrame()
