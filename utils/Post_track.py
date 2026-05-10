@@ -304,6 +304,14 @@ def stitch_id_map(prev_frames, curr_frames):
 
 def build_windows(frames, workers, overlap):
     workers = max(1, min(workers, len(frames)))
+    if overlap > 0 and workers > 1:
+        max_workers_by_overlap = max(1, len(frames) // overlap)
+        if workers > max_workers_by_overlap:
+            print(
+                f"Reducing workers from {workers} to {max_workers_by_overlap}: "
+                f"{len(frames)} processed frames with overlap {overlap} would create mostly-overlap windows."
+            )
+            workers = max_workers_by_overlap
     core_size = int(math.ceil(len(frames) / workers))
     windows = []
     for worker_id in range(workers):

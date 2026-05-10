@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Total speed · interactive plot</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="total-speed-plot-page">
+  <nav class="app-nav" aria-label="Primary">
+    <a class="app-nav-link" href="/">Project Manager</a>
+    <a class="app-nav-link" href="/quickrun">Running progress</a>
+    <a class="app-nav-link" href="/detect_explore">detect_explore</a>
+  </nav>
+  <header class="csv-table-header tsp-header">
+    <h1>Total speed — interactive plot</h1>
+    <p class="csv-table-nav">
+      <a href="/">Project Manager</a>
+      · <a href="/quickrun">Running progress</a>
+      · <a id="tspBackTable" href="#">Back to table</a>
+      · <a id="tspBackResults" class="hidden" href="#">Back to video results</a>
+    </p>
+    <p id="tspPath" class="csv-table-path"></p>
+    <p id="tspMeta" class="csv-table-meta"></p>
+    <p id="tspError" class="quickrun-panel quickrun-error hidden"></p>
+  </header>
+
+  <main class="tsp-main">
+    <div id="tspClipToolbar" class="tsp-clip-toolbar hidden" aria-label="Clip settings">
+      <div class="tsp-clip-row tsp-clip-row-main">
+        <label class="tsp-field">
+          <span class="tsp-field-label">Frames / second</span>
+          <input type="number" id="tspFps" min="0.1" max="10000" step="0.1" value="30" />
+        </label>
+        <label class="tsp-field">
+          <span class="tsp-field-label">Window (minutes)</span>
+          <input type="number" id="tspWinMinutes" min="0.01" max="10080" step="0.01" value="10" />
+        </label>
+        <button type="button" class="tsp-btn tsp-btn-primary" id="tspAddClip">
+          Add Clip
+        </button>
+      </div>
+      <div id="tspPreviewPanel" class="tsp-preview-panel hidden">
+        <div class="tsp-clip-row tsp-clip-row-slider">
+          <label class="tsp-slider-label" for="tspClipSlider">
+            Slide to move clip window
+          </label>
+          <input type="range" id="tspClipSlider" class="tsp-clip-slider" />
+          <div id="tspClipSliderDetail" class="tsp-clip-slider-detail"></div>
+        </div>
+        <div class="tsp-preview-actions">
+          <button type="button" class="tsp-btn tsp-btn-save" id="tspSaveClip">
+            Save clip
+          </button>
+          <button type="button" class="tsp-btn tsp-btn-ghost" id="tspCancelPreview">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="tspPlot" class="tsp-plot" aria-label="Total speed chart"></div>
+    <p class="qr-muted tsp-hint">
+      Drag to pan, scroll or pinch to zoom, double-click to reset axes. Clip bands use frame numbers from the CSV;
+      time labels use your FPS setting.
+    </p>
+
+    <section id="tspClipsSection" class="tsp-clips-section hidden">
+      <h2 class="tsp-clips-heading">Saved clips</h2>
+      <p class="qr-muted tsp-clips-sub">Clips are stored in the app database for this CSV path and reload after refresh; the same entries are listed as subclips under this video on the Project Manager home page. Use Edit to rename or change frames. Delete removes the clip, its band, and the DB row.</p>
+      <ul id="tspClipsList" class="tsp-clips-list"></ul>
+    </section>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
+  <script defer src="/static/total_speed_plot.js"></script>
+</body>
+</html>

@@ -7,9 +7,14 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
+  <nav class="app-nav" aria-label="Primary">
+    <a class="app-nav-link" href="/">Project Manager</a>
+    <a class="app-nav-link" href="/quickrun">Running progress</a>
+    <a class="app-nav-link active" href="/detect_explore">detect_explore</a>
+  </nav>
   <header>
     <h1>detect_explore</h1>
-    <p>Single workspace: browse <code>runs/detect</code>, preview images/video frames, load/edit/save YOLO labels.</p>
+    <p>Single workspace: browse <code>runs/detect</code>, preview images/video frames, load/edit/save YOLO labels. Snapshot batches can open here via <code>?snapshot_dir=&lt;abs path to snapshot folder&gt;</code> (loads <code>*_snapshot_raw.png</code> + matching <code>labels/*.txt</code>).</p>
     <div class="tabs">
       <button id="tabRuns" class="tab-btn active">Runs Label Editor</button>
       <button id="tabCsv" class="tab-btn">CSV Explore</button>

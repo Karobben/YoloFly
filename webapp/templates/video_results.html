@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuickRun results · video</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="video-results-page">
+  <nav class="app-nav" aria-label="Primary">
+    <a class="app-nav-link" href="/">Project Manager</a>
+    <a class="app-nav-link" href="/quickrun">Running progress</a>
+    <a class="app-nav-link" href="/detect_explore">detect_explore</a>
+  </nav>
+  <header class="vr-header">
+    <h1>QuickRun results</h1>
+    <p class="vr-sub">
+      Unique output paths from QuickRun (one row per file). Indexed separately from sessions so results stay listed after you delete a session from the monitor. Images load via the server only under allowed roots.
+    </p>
+    <p class="vr-nav">
+      <a href="/">← Project Manager</a>
+      · <a href="/quickrun">Running progress</a>
+    </p>
+  </header>
+
+  <main class="vr-main">
+    <div id="vrError" class="quickrun-panel quickrun-error hidden"></div>
+    <div id="vrEmpty" class="quickrun-panel hidden">
+      <p>No QuickRun history found for this video path (or no matching project filter).</p>
+      <p class="qr-muted">Run QuickRun from the project manager first; completed jobs show CSV / JSON / plot paths here.</p>
+    </div>
+    <section id="vrIntro" class="vr-intro hidden">
+      <div><strong>Video</strong> <code id="vrVideoPath"></code></div>
+      <div id="vrProjectRow" class="hidden"><strong>Project filter</strong> <code id="vrProjectName"></code></div>
+      <div id="vrClipRow" class="hidden"><strong>Subclip scope</strong> id <code id="vrClipId"></code><span class="qr-muted"> · only outputs for this clip</span></div>
+    </section>
+    <div id="vrRuns"></div>
+  </main>
+
+  <script src="/static/video_results.js"></script>
+</body>
+</html>

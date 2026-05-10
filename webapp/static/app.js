@@ -76,6 +76,12 @@ let trackingCurrent = {};
 let trackingHistory = [];
 let trackingFrameMin = 1;
 let trackingFrameMax = 1;
+const pageQs = new URLSearchParams(window.location.search);
+const initialRunParam = pageQs.get("run");
+const initialSnapshotDir = (pageQs.get("snapshot_dir") || "").trim();
+
+/** True when opened via ?snapshot_dir=… (label load/save use absolute paths). */
+let exploreSnapshotActive = false;
 const CLASS_COLORS = [
   "#3d8bfd", "#ff6b6b", "#51cf66", "#ffd43b", "#845ef7",
   "#22b8cf", "#f06595", "#ffa94d", "#94d82d", "#e599f7",
@@ -639,6 +645,9 @@ function startPlayback() {
 async function refreshRuns() {
   const r = await q("/api/runs");
   fillSelect(runSelect, r.runs || []);
+  if (initialRunParam && (r.runs || []).includes(initialRunParam)) {
+    runSelect.value = initialRunParam;
+  }
   await refreshAssets();
 }
 
@@ -696,12 +705,8 @@ openVideoPathFrameBtn.onclick = () => {
   });
 };
 
-loadLabelBtn.onclick = async () => {
-  const run = runSelect.value;
-  const lp = labelPathInput.value.trim();
-  if (!run || !lp) return;
-  const r = await q(`/api/label?run=${encodeURIComponent(run)}&path=${encodeURIComponent(lp)}`);
-  boxes = parseYolo(r.content || "");
+function applyLoadedLabel(content, exists, displayPath) {
+  boxes = parseYolo(content || "");
   setClassUniverse(boxes.map((b) => b.cls));
   visibleClasses = new Set(classUniverse);
   syncRawFromBoxes();
@@ -710,14 +715,53 @@ loadLabelBtn.onclick = async () => {
   renderBoxList();
   renderClassStats();
   draw();
-  setStatus(r.exists ? `Loaded label: ${lp}` : `Label not found (new file): ${lp}`);
-};
+  setStatus(exists ? `Loaded label: ${displayPath}` : `Label not found (new file): ${displayPath}`);
+}
 
-saveLabelBtn.onclick = async () => {
+loadLabelBtn.onclick = async () => {
+  if (exploreSnapshotActive) {
+    const lp = labelPathInput.value.trim();
+    if (!lp) return;
+    const resp = await fetch(`/api/label_abs?path=${encodeURIComponent(lp)}`);
+    const r = await resp.json();
+    if (r.error) {
+      setStatus(r.error);
+      return;
+    }
+    applyLoadedLabel(r.content || "", r.exists, lp);
+    return;
+  }
   const run = runSelect.value;
   const lp = labelPathInput.value.trim();
   if (!run || !lp) return;
+  const r = await q(`/api/label?run=${encodeURIComponent(run)}&path=${encodeURIComponent(lp)}`);
+  applyLoadedLabel(r.content || "", r.exists, lp);
+};
+
+saveLabelBtn.onclick = async () => {
   syncRawFromBoxes();
+  if (exploreSnapshotActive) {
+    const lp = labelPathInput.value.trim();
+    if (!lp) return;
+    const resp = await fetch("/api/label_abs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path: lp,
+        content: rawText.value + (rawText.value ? "\n" : ""),
+      }),
+    });
+    const r = await resp.json();
+    if (r.error) {
+      setStatus(r.error);
+      return;
+    }
+    setStatus(`Saved: ${r.saved}`);
+    return;
+  }
+  const run = runSelect.value;
+  const lp = labelPathInput.value.trim();
+  if (!run || !lp) return;
   const resp = await fetch("/api/label", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -944,9 +988,52 @@ tabRuns.onclick = () => setTab("runs");
 tabCsv.onclick = () => setTab("csv");
 refreshCsvBtn.onclick = refreshCsvFiles;
 
-refreshRuns();
-refreshCsvFiles();
-refreshJsonFiles();
-updateAddModeUI();
-renderClassStats();
-setTab("runs");
+async function loadSnapshotExplore(dir) {
+  exploreSnapshotActive = false;
+  const resp = await fetch(`/api/snapshot_explore/manifest?dir=${encodeURIComponent(dir)}`);
+  const r = await resp.json();
+  if (!resp.ok || r.error) {
+    setStatus(r.error || `Could not open snapshot folder (${resp.status}).`);
+    return;
+  }
+  if (!r.raw_image_abs) {
+    setStatus("No *_snapshot_raw.png in this folder (expected detect_2 snapshot output).");
+    return;
+  }
+  exploreSnapshotActive = true;
+  labelPathInput.value = r.label_abs_path || "";
+  loadImageURL(`/api/local_file?path=${encodeURIComponent(r.raw_image_abs)}`);
+  setTab("runs");
+  const lp = r.label_abs_path;
+  if (lp) {
+    const lrResp = await fetch(`/api/label_abs?path=${encodeURIComponent(lp)}`);
+    const lr = await lrResp.json();
+    if (lr.error) {
+      setStatus(lr.error);
+      exploreSnapshotActive = false;
+      return;
+    }
+    applyLoadedLabel(lr.content || "", lr.exists, lp);
+  } else {
+    boxes = [];
+    syncRawFromBoxes();
+    renderClassFilters();
+    renderBoxList();
+    renderClassStats();
+    draw();
+    setStatus("Snapshot folder opened; no matching label path derived from raw PNG name.");
+  }
+}
+
+async function boot() {
+  await refreshRuns();
+  refreshCsvFiles();
+  refreshJsonFiles();
+  updateAddModeUI();
+  renderClassStats();
+  setTab("runs");
+  if (initialSnapshotDir) {
+    await loadSnapshotExplore(initialSnapshotDir);
+  }
+}
+boot();

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+    #!/usr/bin/env python3
 """
 Quick visualization helpers for FastView tracking JSON files.
 
@@ -171,13 +171,8 @@ def plot_speed_by_fly(
     return output
 
 
-def plot_total_speed(
-    json_path: str | Path,
-    output: str | Path | None = None,
-    line_width: float = 1.2,
-    smooth_window: int = 30,
-) -> Path:
-    """Plot total moving speed summed across all flies for each frame."""
+def total_speed_table(json_path: str | Path, smooth_window: int = 30) -> pd.DataFrame:
+    """Per-frame sum of fly speeds and rolling-smoothed column (same series as total_speed plot)."""
     df = add_speed(read_tracking_json(json_path))
     df = df[df["speed"].notna()].copy()
     if df.empty:
@@ -190,6 +185,17 @@ def plot_total_speed(
         .reset_index(drop=True)
     )
     total["speed_smooth"] = total["speed"].rolling(smooth_window, center=True, min_periods=1).mean()
+    return total
+
+
+def plot_total_speed(
+    json_path: str | Path,
+    output: str | Path | None = None,
+    line_width: float = 1.2,
+    smooth_window: int = 30,
+) -> Path:
+    """Plot total moving speed summed across all flies for each frame; also saves the plot table as CSV."""
+    total = total_speed_table(json_path, smooth_window=smooth_window)
 
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(total["frame"], total["speed_smooth"], linewidth=line_width, color="#54a24b")
@@ -201,6 +207,9 @@ def plot_total_speed(
         output = Path(json_path).with_suffix(".total_speed.png")
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    csv_out = output.with_suffix(".csv")
+    total.to_csv(csv_out, index=False)
+
     fig.savefig(output, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return output
@@ -262,7 +271,9 @@ def main() -> None:
             line_width=args.line_width,
             smooth_window=args.speed_window,
         )
+        csv_out = Path(total_out).with_suffix(".csv")
         print(f"Saved total speed plot: {total_out}")
+        print(f"Saved total speed table: {csv_out}")
 
 
 if __name__ == "__main__":

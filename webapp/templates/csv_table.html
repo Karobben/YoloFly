@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CSV table view</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="csv-table-page">
+  <nav class="app-nav" aria-label="Primary">
+    <a class="app-nav-link" href="/">Project Manager</a>
+    <a class="app-nav-link" href="/quickrun">Running progress</a>
+    <a class="app-nav-link" href="/detect_explore">detect_explore</a>
+  </nav>
+  <header class="csv-table-header">
+    <h1>CSV table view</h1>
+    <p class="csv-table-nav">
+      <a href="/">Project Manager</a>
+      · <a href="/quickrun">Running progress</a>
+      · <a id="csvBackResults" class="hidden" href="#">Back to results</a>
+    </p>
+    <p id="csvTablePath" class="csv-table-path"></p>
+    <p id="csvPlotActions" class="csv-plot-actions hidden">
+      <a id="csvTotalSpeedPlotLink" class="csv-action-btn" href="#">Interactive plot (total speed) →</a>
+    </p>
+    <p id="csvTableMeta" class="csv-table-meta"></p>
+    <p id="csvTableError" class="quickrun-panel quickrun-error hidden"></p>
+  </header>
+
+  <main class="csv-table-main">
+    <div id="csvTableScroll" class="csv-table-scroll hidden">
+      <table id="csvDataTable" class="csv-data-table">
+        <thead id="csvThead"></thead>
+        <tbody id="csvTbody"></tbody>
+      </table>
+    </div>
+    <p id="csvTableEmpty" class="qr-muted hidden">No rows to display.</p>
+  </main>
+
+  <script src="/static/csv_table.js"></script>
+</body>
+</html>

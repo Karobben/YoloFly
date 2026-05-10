@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Project Manager</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <nav class="app-nav" aria-label="Primary">
+    <a class="app-nav-link active" href="/">Project Manager</a>
+    <a class="app-nav-link" href="/quickrun">Running progress</a>
+    <a class="app-nav-link" href="/detect_explore">detect_explore</a>
+  </nav>
+  <header>
+    <h1>Project Manager</h1>
+    <p>Create/delete projects, keep lab info, and manually register videos.</p>
+  </header>
+
+  <main class="home-main">
+    <aside class="home-panel">
+      <div class="field">
+        <label>Project name</label>
+        <input id="projectNameInput" type="text" placeholder="project_labA" />
+      </div>
+      <div class="field">
+        <label>Lab information</label>
+        <textarea id="labInfoInput" rows="4" placeholder="Lab name, notes, owner, experiment details..."></textarea>
+      </div>
+      <div class="row">
+        <button id="createProjectBtn">Create project</button>
+        <button id="refreshProjectsBtn">Refresh list</button>
+      </div>
+      <p id="homeStatus"></p>
+
+      <hr class="home-sep" />
+
+      <div class="field">
+        <label>Videos by directory (batch)</label>
+        <input id="videoDirInput" type="text" placeholder="/path/to/videos_folder" />
+        <button id="addDirBtn">Add all videos from directory</button>
+      </div>
+      <div class="field">
+        <label>Videos by paths (one by one)</label>
+        <textarea id="videoPathsInput" rows="5" placeholder="/path/a.mp4&#10;/path/b.mov"></textarea>
+        <button id="addPathsBtn">Add listed video paths</button>
+      </div>
+
+      <hr class="home-sep" />
+
+      <div class="field">
+        <label>Video meta TSV (tab-separated)</label>
+        <input id="videoMetaTsvPath" type="text" placeholder="/path/to/GroupAging.tsv" />
+        <div class="meta-tsv-row">
+          <button id="importVideoMetaTsvBtn" type="button">Load meta from TSV</button>
+          <button id="exportVideoMetaTsvBtn" type="button">Save meta to TSV</button>
+        </div>
+        <small>Columns: video name, disk diameter (px), disk radius (mm), frame start, frame end (−1 = skip end), fly count, detailed location, split X, split Y, video width (px), video height (px). Relative paths in location column do not overwrite stored absolute paths.</small>
+      </div>
+    </aside>
+
+    <section class="home-panel">
+      <div class="field">
+        <label>Projects</label>
+        <div id="projectList" class="project-list"></div>
+      </div>
+      <div id="projectDetail" class="project-detail">
+        <h2 id="detailTitle">No project selected</h2>
+        <div class="field">
+          <label>Lab information (edit selected project)</label>
+          <textarea id="detailLabInfo" rows="4" disabled></textarea>
+          <button id="saveLabInfoBtn" disabled>Save lab info</button>
+        </div>
+        <div class="field">
+          <label>Registered videos</label>
+          <div id="videoBatchBar" class="video-batch-bar hidden">
+            <label class="video-select-all-label">
+              <input type="checkbox" id="videoSelectAll" />
+              Select all videos
+            </label>
+            <label class="video-select-all-label">
+              <input type="checkbox" id="videoSubclipSelectAll" />
+              Select all subclips
+            </label>
+            <button type="button" id="batchDeleteVideosBtn">Delete selected</button>
+            <button type="button" id="quickRunFastviewBtn">QuickRun</button>
+            <button type="button" id="snapshotBatchBtn" title="detect_2.py single-frame snapshot at each video’s frame start">Snapshot (1 frame)</button>
+          </div>
+          <p id="videoListEmpty" class="video-list-empty">No videos.</p>
+          <div id="videoTableWrap" class="video-table-wrap hidden">
+            <table class="video-table" aria-label="Registered videos">
+              <thead>
+                <tr>
+                  <th class="col-cb" scope="col"></th>
+                  <th class="col-name video-col-fold-toggle" id="videoColHeader" scope="col" title="Click to fold or unfold all sub-clips">Video</th>
+                  <th class="col-num col-snap" scope="col" title="Class 0 / class 1 counts from the snapshot label file; green when aligned with Flies">Detected Flies</th>
+                  <th class="col-num" scope="col">Ø px</th>
+                  <th class="col-num" scope="col">R mm</th>
+                  <th class="col-num" scope="col">Frame start</th>
+                  <th class="col-num" scope="col">Frame end</th>
+                  <th class="col-num" scope="col">Flies</th>
+                  <th class="col-split" scope="col">Split</th>
+                  <th class="col-actions" scope="col"></th>
+                </tr>
+              </thead>
+              <tbody id="videoList"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="videoModal" class="video-modal hidden" role="dialog" aria-modal="true" aria-label="Video player">
+    <div class="video-modal-card">
+      <div class="video-modal-header">
+        <strong id="videoModalTitle">Video</strong>
+        <div class="video-modal-actions">
+          <button id="videoMeasureToggleBtn" type="button">Measure distance</button>
+          <button id="videoMeasureClearBtn" type="button" class="hidden">Clear points</button>
+          <button id="videoFullscreenBtn" type="button">Fullscreen</button>
+          <button id="closeVideoModalBtn" type="button">Close</button>
+        </div>
+      </div>
+      <div id="videoModalStage" class="video-modal-stage">
+        <video id="videoModalPlayer" controls playsinline></video>
+        <canvas id="videoMeasureCanvas" class="video-measure-canvas" aria-hidden="true"></canvas>
+      </div>
+      <p id="videoMeasureHint" class="video-measure-hint hidden">Click to place points; drag to move. Distances are in video pixels (native resolution). Toggle off to use scrub bar.</p>
+    </div>
+  </div>
+
+  <div id="videoMetaModal" class="video-modal meta-modal hidden" role="dialog" aria-modal="true" aria-label="Video metadata">
+    <div class="video-modal-card meta-modal-card">
+      <div class="video-modal-header">
+        <strong id="videoMetaModalTitle">Video metadata</strong>
+        <button id="closeVideoMetaModalBtn" type="button">Close</button>
+      </div>
+      <p class="meta-path" id="videoMetaPathLabel"></p>
+      <div class="meta-grid">
+        <label>Disk diameter (pixels)
+          <input id="metaDiskPixel" type="number" step="any" placeholder="optional" />
+        </label>
+        <label>Disk radius (mm)
+          <input id="metaDiskRadiusMm" type="number" step="any" placeholder="optional" />
+        </label>
+        <label>Frame start
+          <input id="metaFrameStart" type="number" min="1" step="1" placeholder="optional" />
+        </label>
+        <label>Frame end
+          <input id="metaFrameEnd" type="number" min="1" step="1" placeholder="optional" />
+        </label>
+        <label>Number of flies
+          <input id="metaFlyCount" type="number" min="0" step="1" placeholder="optional" />
+        </label>
+        <label>Split in X (if multiple arenas)
+          <input id="metaSplitX" type="number" min="1" step="1" placeholder="optional" />
+        </label>
+        <label>Split in Y (if multiple arenas)
+          <input id="metaSplitY" type="number" min="1" step="1" placeholder="optional" />
+        </label>
+        <label class="meta-span-2">Detailed location
+          <textarea id="metaDetailedLocation" rows="3" placeholder="e.g. room, rig, camera side…"></textarea>
+        </label>
+        <label>Total frames (auto-detected)
+          <input id="metaTotalFrames" type="text" readonly placeholder="—" />
+        </label>
+        <label>Width (px, auto-detected)
+          <input id="metaVideoWidth" type="text" readonly placeholder="—" />
+        </label>
+        <label>Height (px, auto-detected)
+          <input id="metaVideoHeight" type="text" readonly placeholder="—" />
+        </label>
+        <div class="meta-actions-row">
+          <button id="metaDetectFramesBtn" type="button">Detect frames &amp; resolution</button>
+          <button id="metaSaveBtn" type="button">Save</button>
+        </div>
+      </div>
+      <p id="metaModalStatus" class="meta-status"></p>
+    </div>
+  </div>
+
+  <div id="projectMetaModal" class="video-modal meta-modal project-meta-modal hidden" role="dialog" aria-modal="true" aria-label="Project meta">
+    <div class="video-modal-card meta-modal-card project-meta-card">
+      <div class="video-modal-header">
+        <strong id="projectMetaModalTitle">Project meta</strong>
+        <button id="closeProjectMetaModalBtn" type="button">Close</button>
+      </div>
+      <p class="meta-path" id="projectMetaNameLabel"></p>
+      <div class="meta-grid project-meta-grid">
+        <label class="meta-span-2">Currently (status / notes)
+          <textarea id="projectCurrently" rows="3" placeholder="What you are doing with this project now…"></textarea>
+        </label>
+        <label class="meta-span-2">Abstract
+          <textarea id="projectAbstract" rows="5" placeholder="Short description of the experiment or dataset…"></textarea>
+        </label>
+        <label class="meta-span-2">QuickRun output (default <code>-o</code> directory, relative to project parent)
+          <input id="projectQuickrunOutput" type="text" placeholder="e.g. QuickTestForAging — used when you open QuickRun" />
+        </label>
+        <label class="meta-span-2">Snapshot batch base (<code>detect_2.py --project</code>; default folder <code>snapshot</code> under the same parent as YoloFly)
+          <input id="projectSnapshotOutput" type="text" placeholder="e.g. snapshot or MyRuns/snapshots — results in …/name under this folder" />
+        </label>
+      </div>
+      <div class="meta-actions-row">
+        <button id="projectMetaSaveBtn" type="button">Save project meta</button>
+      </div>
+      <p id="projectMetaModalStatus" class="meta-status"></p>
+    </div>
+  </div>
+
+  <div id="quickRunModal" class="video-modal quickrun-modal hidden" role="dialog" aria-modal="true" aria-label="QuickRun FastView">
+    <div class="video-modal-card quickrun-modal-card">
+      <div class="video-modal-header">
+        <strong>QuickRun (FastView pipeline)</strong>
+        <button id="closeQuickRunModalBtn" type="button">Close</button>
+      </div>
+      <p id="quickRunScopeText" class="quickrun-scope"></p>
+      <p class="quickrun-note">Each video runs as its own pipeline job. After you start, you are sent to the progress page (logs and output paths per video).</p>
+      <div class="meta-grid quickrun-grid">
+        <label>Workers
+          <input id="quickRunWorkers" type="number" min="1" step="1" value="64" />
+        </label>
+        <label>Window overlap
+          <input id="quickRunWindowOverlap" type="number" min="0" step="1" value="200" />
+        </label>
+        <label>Speed window
+          <input id="quickRunSpeedWindow" type="number" min="1" step="1" value="300" />
+        </label>
+        <label>Output directory (-o)
+          <input id="quickRunOutputDir" type="text" value="QuickTestForAging" />
+        </label>
+        <label class="meta-span-2">Weights (--weights, relative to project parent)
+          <input id="quickRunWeights" type="text" value="YoloFly/runs/train/2022_05_11_p633_1280_5l_e700_b128/weights/best.pt" />
+        </label>
+        <label>Frame skip
+          <input id="quickRunFrameSkip" type="number" min="1" step="1" value="30" />
+        </label>
+        <label>Conf threshold
+          <input id="quickRunConfThres" type="number" step="any" value="0.3" />
+        </label>
+        <label>IoU threshold
+          <input id="quickRunIouThres" type="number" step="any" value="0.45" />
+        </label>
+        <label>Image size
+          <input id="quickRunImgsz" type="number" min="32" step="32" value="640" />
+        </label>
+        <label>Device
+          <input id="quickRunDevice" type="text" placeholder="empty = auto, or 0 / cpu" />
+        </label>
+        <label>Limit rows (0 = all)
+          <input id="quickRunLimit" type="number" min="0" step="1" value="0" />
+        </label>
+      </div>
+      <div class="quickrun-check-row">
+        <label><input id="quickRunSkipDetect" type="checkbox" /> Skip detection (reuse CSV)</label>
+        <label><input id="quickRunSkipTrack" type="checkbox" /> Skip tracking</label>
+        <label><input id="quickRunSkipViz" type="checkbox" /> Skip visualization</label>
+        <label><input id="quickRunRerun" type="checkbox" /> Rerun even if outputs exist</label>
+      </div>
+      <div class="meta-actions-row quickrun-actions">
+        <button id="quickRunStartBtn" type="button">Start pipeline</button>
+        <button id="quickRunResetDefaultsBtn" type="button">Reset defaults</button>
+      </div>
+      <p id="quickRunModalStatus" class="meta-status"></p>
+    </div>
+  </div>
+
+  <script src="/static/home.js"></script>
+</body>
+</html>

@@ -29,6 +29,31 @@ def csv_name_for(video: Path, frame_skip: int) -> str:
     return f"{video.name}{suffix}.csv"
 
 
+def expected_track_json_path(track_output: Path, csv_path: Path) -> Path | None:
+    if not csv_path.exists():
+        return None
+    return Path(str(track_output) + "_" + str(first_frame_from_csv(csv_path)) + "_.json")
+
+
+def resolve_existing_track_json(track_output: Path, csv_path: Path) -> Path | None:
+    expected = expected_track_json_path(track_output, csv_path)
+    if expected is not None and expected.exists():
+        return expected
+    candidates = sorted(track_output.parent.glob(f"{track_output.name}_*_.json"))
+    return candidates[0] if len(candidates) == 1 else (candidates[-1] if candidates else None)
+
+
+def expected_plot_paths(tracked_json: Path, output_dir: Path) -> list[Path]:
+    """Outputs from visualize_tracks (PNG plots + total_speed table CSV). Used for skip-if-complete."""
+    stem = tracked_json.name
+    return [
+        output_dir / f"{stem}.tracks_by_fly.png",
+        output_dir / f"{stem}.speed_by_fly.png",
+        output_dir / f"{stem}.total_speed.png",
+        output_dir / f"{stem}.total_speed.csv",
+    ]
+
+
 def first_frame_from_csv(path: Path) -> int:
     with path.open("r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -62,6 +87,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-detect", action="store_true", help="Reuse an existing CSV in csv/.")
     parser.add_argument("--skip-track", action="store_true", help="Only run detection and stop.")
     parser.add_argument("--skip-visualize", action="store_true", help="Do not create FastView plots.")
+    parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help="Re-run all enabled stages even if output files already exist.",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Only process the first N rows, for testing.")
     return parser.parse_args()
 
@@ -146,70 +176,93 @@ def run_one(row: dict, args: argparse.Namespace) -> None:
     per_region_flies = flies_per_region(row["total_flies"], split_x, split_y)
 
     if not args.skip_detect:
-        detect_cmd = [
-            sys.executable,
-            str(ROOT / "detect_2.py"),
-            "--weights",
-            str(weights),
-            "--source",
-            str(video),
-            "--frame-skip",
-            str(args.frame_skip),
-            "--conf-thres",
-            str(args.conf_thres),
-            "--iou-thres",
-            str(args.iou_thres),
-            "--imgsz",
-            str(args.imgsz),
-            "--device",
-            str(args.device),
-            "--quiet",
-        ]
-        run_cmd(detect_cmd, WORKDIR)
+        if csv_path.exists() and not args.rerun:
+            print(f"Skip detection (CSV exists): {csv_path}")
+        else:
+            detect_cmd = [
+                sys.executable,
+                str(ROOT / "detect_2.py"),
+                "--weights",
+                str(weights),
+                "--source",
+                str(video),
+                "--frame-skip",
+                str(args.frame_skip),
+                "--conf-thres",
+                str(args.conf_thres),
+                "--iou-thres",
+                str(args.iou_thres),
+                "--imgsz",
+                str(args.imgsz),
+                "--device",
+                str(args.device),
+                "--quiet",
+            ]
+            run_cmd(detect_cmd, WORKDIR)
 
     needs_csv = (not args.skip_track) or (not args.skip_visualize)
     if needs_csv and not csv_path.exists():
         raise FileNotFoundError(f"Detection CSV not found: {csv_path}")
 
-    if not args.skip_track:
-        track_cmd = [
-            sys.executable,
-            str(ROOT / "utils" / "Post_track.py"),
-            "-i",
-            str(csv_path),
-            "-o",
-            str(track_output),
-            "-v",
-            str(video),
-            "-n",
-            str(per_region_flies),
-            "--workers",
-            str(args.workers),
-            "--window-overlap",
-            str(args.window_overlap),
-        ]
-        if split_x:
-            track_cmd += ["--split-x", split_x]
-        if split_y:
-            track_cmd += ["--split-y", split_y]
-        run_cmd(track_cmd, WORKDIR)
+    tracked_json = resolve_existing_track_json(track_output, csv_path) if csv_path.exists() else None
 
-    tracked_json = Path(str(track_output) + "_" + str(first_frame_from_csv(csv_path)) + "_.json") if csv_path.exists() else None
+    if not args.skip_track:
+        if tracked_json is not None and not args.rerun:
+            print(f"Skip tracking (JSON exists): {tracked_json}")
+        else:
+            track_cmd = [
+                sys.executable,
+                str(ROOT / "utils" / "Post_track.py"),
+                "-i",
+                str(csv_path),
+                "-o",
+                str(track_output),
+                "-v",
+                str(video),
+                "-n",
+                str(per_region_flies),
+                "--workers",
+                str(args.workers),
+                "--window-overlap",
+                str(args.window_overlap),
+            ]
+            if split_x:
+                track_cmd += ["--split-x", split_x]
+            if split_y:
+                track_cmd += ["--split-y", split_y]
+            run_cmd(track_cmd, WORKDIR)
+            tracked_json = resolve_existing_track_json(track_output, csv_path)
+            if tracked_json is None:
+                raise FileNotFoundError(
+                    f"Tracking appears complete but no JSON output found near base name: {track_output}"
+                )
+
     if not args.skip_visualize:
+        # After detection/tracking were skipped, reload JSON from disk (plots read only this file).
+        if csv_path.exists():
+            tracked_json = resolve_existing_track_json(track_output, csv_path)
         if tracked_json is None:
-            raise FileNotFoundError(f"Cannot determine tracking JSON because CSV is missing: {csv_path}")
+            raise FileNotFoundError(
+                f"Cannot determine tracking JSON. Expected near base name: {track_output}"
+            )
         out_dir = resolve_workdir_path(args.output_dir)
-        view_cmd = [
-            sys.executable,
-            str(ROOT / "FastView" / "visualize_tracks.py"),
-            "-j",
-            str(tracked_json),
-            "--speed-window",
-            str(args.speed_window),
-            "-o",
-            str(out_dir),
-        ]
-        run_cmd(view_cmd, WORKDIR)
+        plot_paths = expected_plot_paths(tracked_json, out_dir)
+        if all(p.exists() for p in plot_paths) and not args.rerun:
+            print("Skip visualization (all plots exist):")
+            for p in plot_paths:
+                print(f"  {p}")
+        else:
+            view_cmd = [
+                sys.executable,
+                str(ROOT / "FastView" / "visualize_tracks.py"),
+                "-j",
+                str(tracked_json),
+                "--speed-window",
+                str(args.speed_window),
+                "-o",
+                str(out_dir),
+            ]
+            run_cmd(view_cmd, WORKDIR)
 
     print("\nFastView outputs:")
     print(f"Detection CSV: {csv_path}")

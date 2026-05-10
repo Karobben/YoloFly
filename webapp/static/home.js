@@ -1,0 +1,1804 @@
+const projectNameInput = document.getElementById("projectNameInput");
+const labInfoInput = document.getElementById("labInfoInput");
+const createProjectBtn = document.getElementById("createProjectBtn");
+const refreshProjectsBtn = document.getElementById("refreshProjectsBtn");
+const homeStatus = document.getElementById("homeStatus");
+const projectList = document.getElementById("projectList");
+const detailTitle = document.getElementById("detailTitle");
+const detailLabInfo = document.getElementById("detailLabInfo");
+const saveLabInfoBtn = document.getElementById("saveLabInfoBtn");
+const videoList = document.getElementById("videoList");
+const videoListEmpty = document.getElementById("videoListEmpty");
+const videoTableWrap = document.getElementById("videoTableWrap");
+const videoDirInput = document.getElementById("videoDirInput");
+const addDirBtn = document.getElementById("addDirBtn");
+const videoPathsInput = document.getElementById("videoPathsInput");
+const addPathsBtn = document.getElementById("addPathsBtn");
+const videoModal = document.getElementById("videoModal");
+const videoModalTitle = document.getElementById("videoModalTitle");
+const videoModalStage = document.getElementById("videoModalStage");
+const videoModalPlayer = document.getElementById("videoModalPlayer");
+const videoMeasureCanvas = document.getElementById("videoMeasureCanvas");
+const videoMeasureToggleBtn = document.getElementById("videoMeasureToggleBtn");
+const videoMeasureClearBtn = document.getElementById("videoMeasureClearBtn");
+const videoMeasureHint = document.getElementById("videoMeasureHint");
+const closeVideoModalBtn = document.getElementById("closeVideoModalBtn");
+const videoFullscreenBtn = document.getElementById("videoFullscreenBtn");
+const videoSubclipSelectAll = document.getElementById("videoSubclipSelectAll");
+const videoColHeader = document.getElementById("videoColHeader");
+
+const MEASURE_HIT_PX = 14;
+/** Pauses at end of meta/subclip frame window (see openVideoModal). */
+let videoPlaybackTimeHandler = null;
+
+let videoMeasureMode = false;
+let videoMeasurePoints = [];
+let videoMeasureDragIdx = -1;
+
+function getVideoContentMetrics() {
+  const v = videoModalPlayer;
+  const vw = v.videoWidth;
+  const vh = v.videoHeight;
+  const ew = v.clientWidth;
+  const eh = v.clientHeight;
+  if (!vw || !vh || !ew || !eh) return null;
+  const scale = Math.min(ew / vw, eh / vh);
+  const cw = vw * scale;
+  const ch = vh * scale;
+  const ox = (ew - cw) / 2;
+  const oy = (eh - ch) / 2;
+  return { vw, vh, scale, ox, oy, cw, ch, ew, eh };
+}
+
+function clientToNativeMeasure(clientX, clientY) {
+  const v = videoModalPlayer;
+  const r = v.getBoundingClientRect();
+  const lx = clientX - r.left;
+  const ly = clientY - r.top;
+  const m = getVideoContentMetrics();
+  if (!m) return null;
+  const rx = lx - m.ox;
+  const ry = ly - m.oy;
+  if (rx < 0 || ry < 0 || rx > m.cw || ry > m.ch) return null;
+  return { nx: rx / m.scale, ny: ry / m.scale };
+}
+
+function nativeToLocalVideo(nx, ny) {
+  const m = getVideoContentMetrics();
+  if (!m) return null;
+  return { x: m.ox + nx * m.scale, y: m.oy + ny * m.scale };
+}
+
+function segmentDistPxNative(a, b) {
+  const dx = b.nx - a.nx;
+  const dy = b.ny - a.ny;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function canvasLocalFromClient(clientX, clientY) {
+  const c = videoMeasureCanvas.getBoundingClientRect();
+  return { x: clientX - c.left, y: clientY - c.top };
+}
+
+function findMeasureHitIndex(clientX, clientY) {
+  const { x: cx, y: cy } = canvasLocalFromClient(clientX, clientY);
+  const vr = videoModalPlayer.getBoundingClientRect();
+  const cr = videoMeasureCanvas.getBoundingClientRect();
+  const offX = vr.left - cr.left;
+  const offY = vr.top - cr.top;
+  for (let i = videoMeasurePoints.length - 1; i >= 0; i--) {
+    const p = videoMeasurePoints[i];
+    const loc = nativeToLocalVideo(p.nx, p.ny);
+    if (!loc) continue;
+    const px = offX + loc.x;
+    const py = offY + loc.y;
+    const d = Math.hypot(cx - px, cy - py);
+    if (d <= MEASURE_HIT_PX) return i;
+  }
+  return -1;
+}
+
+function drawVideoMeasureOverlay() {
+  const canvas = videoMeasureCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const vr = videoModalPlayer.getBoundingClientRect();
+  const cr = canvas.getBoundingClientRect();
+  const offX = vr.left - cr.left;
+  const offY = vr.top - cr.top;
+
+  const screenPts = [];
+  for (let i = 0; i < videoMeasurePoints.length; i++) {
+    const loc = nativeToLocalVideo(videoMeasurePoints[i].nx, videoMeasurePoints[i].ny);
+    if (!loc) return;
+    screenPts.push({ x: offX + loc.x, y: offY + loc.y });
+  }
+
+  ctx.strokeStyle = "#55ff88";
+  ctx.lineWidth = 2;
+  ctx.font = "13px sans-serif";
+
+  if (screenPts.length >= 2) {
+    ctx.beginPath();
+    ctx.moveTo(screenPts[0].x, screenPts[0].y);
+    for (let i = 1; i < screenPts.length; i++) ctx.lineTo(screenPts[i].x, screenPts[i].y);
+    ctx.stroke();
+
+    let total = 0;
+    for (let i = 0; i < videoMeasurePoints.length - 1; i++) {
+      const d = segmentDistPxNative(videoMeasurePoints[i], videoMeasurePoints[i + 1]);
+      total += d;
+      const mx = (screenPts[i].x + screenPts[i + 1].x) / 2;
+      const my = (screenPts[i].y + screenPts[i + 1].y) / 2;
+      const label = `${d.toFixed(1)} px`;
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(0,0,0,0.75)";
+      ctx.fillRect(mx - tw / 2 - 4, my - 11, tw + 8, 18);
+      ctx.fillStyle = "#a8ffc8";
+      ctx.fillText(label, mx - tw / 2, my + 4);
+    }
+    const sum = `Total: ${total.toFixed(1)} px`;
+    const twSum = ctx.measureText(sum).width;
+    ctx.fillStyle = "rgba(0,0,0,0.65)";
+    ctx.fillRect(8, 8, twSum + 12, 22);
+    ctx.fillStyle = "#9ec3ff";
+    ctx.fillText(sum, 14, 24);
+  }
+
+  ctx.strokeStyle = "#ffffff";
+  ctx.fillStyle = "#55ff88";
+  for (const q of screenPts) {
+    ctx.beginPath();
+    ctx.arc(q.x, q.y, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+}
+
+function resizeVideoMeasureCanvas() {
+  const stage = videoModalStage;
+  const canvas = videoMeasureCanvas;
+  if (!stage || !canvas) return;
+  const cw = stage.clientWidth;
+  const ch = stage.clientHeight;
+  if (!cw || !ch) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(cw * dpr);
+  canvas.height = Math.round(ch * dpr);
+  canvas.style.width = `${cw}px`;
+  canvas.style.height = `${ch}px`;
+  drawVideoMeasureOverlay();
+}
+
+function resetVideoMeasure() {
+  videoMeasureMode = false;
+  videoMeasurePoints = [];
+  videoMeasureDragIdx = -1;
+  if (videoModalStage) videoModalStage.classList.remove("measure-active");
+  if (videoMeasureHint) videoMeasureHint.classList.add("hidden");
+  if (videoMeasureClearBtn) videoMeasureClearBtn.classList.add("hidden");
+  if (videoMeasureToggleBtn) videoMeasureToggleBtn.textContent = "Measure distance";
+  drawVideoMeasureOverlay();
+}
+
+function setVideoMeasureMode(on) {
+  videoMeasureMode = !!on;
+  if (!videoMeasureMode) videoMeasureDragIdx = -1;
+  if (videoModalStage) videoModalStage.classList.toggle("measure-active", videoMeasureMode);
+  if (videoMeasureHint) videoMeasureHint.classList.toggle("hidden", !videoMeasureMode);
+  if (videoMeasureClearBtn) videoMeasureClearBtn.classList.toggle("hidden", !videoMeasureMode);
+  if (videoMeasureToggleBtn) {
+    videoMeasureToggleBtn.textContent = videoMeasureMode ? "Stop measuring" : "Measure distance";
+  }
+  resizeVideoMeasureCanvas();
+}
+const videoMetaModal = document.getElementById("videoMetaModal");
+const videoMetaModalTitle = document.getElementById("videoMetaModalTitle");
+const videoMetaPathLabel = document.getElementById("videoMetaPathLabel");
+const closeVideoMetaModalBtn = document.getElementById("closeVideoMetaModalBtn");
+const metaDiskPixel = document.getElementById("metaDiskPixel");
+const metaDiskRadiusMm = document.getElementById("metaDiskRadiusMm");
+const metaFrameStart = document.getElementById("metaFrameStart");
+const metaFrameEnd = document.getElementById("metaFrameEnd");
+const metaFlyCount = document.getElementById("metaFlyCount");
+const metaSplitX = document.getElementById("metaSplitX");
+const metaSplitY = document.getElementById("metaSplitY");
+const metaDetailedLocation = document.getElementById("metaDetailedLocation");
+const metaTotalFrames = document.getElementById("metaTotalFrames");
+const metaVideoWidth = document.getElementById("metaVideoWidth");
+const metaVideoHeight = document.getElementById("metaVideoHeight");
+const metaDetectFramesBtn = document.getElementById("metaDetectFramesBtn");
+const metaSaveBtn = document.getElementById("metaSaveBtn");
+const metaModalStatus = document.getElementById("metaModalStatus");
+const projectMetaModal = document.getElementById("projectMetaModal");
+const projectMetaModalTitle = document.getElementById("projectMetaModalTitle");
+const projectMetaNameLabel = document.getElementById("projectMetaNameLabel");
+const projectCurrently = document.getElementById("projectCurrently");
+const projectAbstract = document.getElementById("projectAbstract");
+const projectQuickrunOutput = document.getElementById("projectQuickrunOutput");
+const projectSnapshotOutput = document.getElementById("projectSnapshotOutput");
+const closeProjectMetaModalBtn = document.getElementById("closeProjectMetaModalBtn");
+const projectMetaSaveBtn = document.getElementById("projectMetaSaveBtn");
+const projectMetaModalStatus = document.getElementById("projectMetaModalStatus");
+const videoBatchBar = document.getElementById("videoBatchBar");
+const videoSelectAll = document.getElementById("videoSelectAll");
+const batchDeleteVideosBtn = document.getElementById("batchDeleteVideosBtn");
+const quickRunFastviewBtn = document.getElementById("quickRunFastviewBtn");
+const snapshotBatchBtn = document.getElementById("snapshotBatchBtn");
+const quickRunModal = document.getElementById("quickRunModal");
+const quickRunScopeText = document.getElementById("quickRunScopeText");
+const closeQuickRunModalBtn = document.getElementById("closeQuickRunModalBtn");
+const quickRunStartBtn = document.getElementById("quickRunStartBtn");
+const quickRunResetDefaultsBtn = document.getElementById("quickRunResetDefaultsBtn");
+const quickRunModalStatus = document.getElementById("quickRunModalStatus");
+const quickRunWorkers = document.getElementById("quickRunWorkers");
+const quickRunWindowOverlap = document.getElementById("quickRunWindowOverlap");
+const quickRunSpeedWindow = document.getElementById("quickRunSpeedWindow");
+const quickRunOutputDir = document.getElementById("quickRunOutputDir");
+const quickRunWeights = document.getElementById("quickRunWeights");
+const quickRunFrameSkip = document.getElementById("quickRunFrameSkip");
+const quickRunConfThres = document.getElementById("quickRunConfThres");
+const quickRunIouThres = document.getElementById("quickRunIouThres");
+const quickRunImgsz = document.getElementById("quickRunImgsz");
+const quickRunDevice = document.getElementById("quickRunDevice");
+const quickRunLimit = document.getElementById("quickRunLimit");
+const quickRunSkipDetect = document.getElementById("quickRunSkipDetect");
+const quickRunSkipTrack = document.getElementById("quickRunSkipTrack");
+const quickRunSkipViz = document.getElementById("quickRunSkipViz");
+const quickRunRerun = document.getElementById("quickRunRerun");
+const videoMetaTsvPath = document.getElementById("videoMetaTsvPath");
+const importVideoMetaTsvBtn = document.getElementById("importVideoMetaTsvBtn");
+const exportVideoMetaTsvBtn = document.getElementById("exportVideoMetaTsvBtn");
+
+let projects = [];
+let selectedProject = "";
+let editingVideoPath = "";
+/** When non-null, QuickRun uses only these paths; null means all project videos. */
+let quickRunVideoPaths = null;
+/** Last full project payload from the server (for QuickRun default output dir, etc.). */
+let cachedProjectDetail = null;
+
+const QUICK_RUN_DEFAULTS = {
+  workers: 64,
+  windowOverlap: 200,
+  speedWindow: 300,
+  outputDir: "QuickTestForAging",
+  weights: "YoloFly/runs/train/2022_05_11_p633_1280_5l_e700_b128/weights/best.pt",
+  frameSkip: 30,
+  confThres: 0.3,
+  iouThres: 0.45,
+  imgsz: 640,
+  device: "",
+  limit: 0,
+  skipDetect: false,
+  skipTrack: false,
+  skipVisualize: false,
+  rerun: false,
+};
+
+function applyQuickRunDefaultsToForm() {
+  if (!quickRunWorkers) return;
+  quickRunWorkers.value = String(QUICK_RUN_DEFAULTS.workers);
+  quickRunWindowOverlap.value = String(QUICK_RUN_DEFAULTS.windowOverlap);
+  quickRunSpeedWindow.value = String(QUICK_RUN_DEFAULTS.speedWindow);
+  quickRunOutputDir.value = QUICK_RUN_DEFAULTS.outputDir;
+  quickRunWeights.value = QUICK_RUN_DEFAULTS.weights;
+  quickRunFrameSkip.value = String(QUICK_RUN_DEFAULTS.frameSkip);
+  quickRunConfThres.value = String(QUICK_RUN_DEFAULTS.confThres);
+  quickRunIouThres.value = String(QUICK_RUN_DEFAULTS.iouThres);
+  quickRunImgsz.value = String(QUICK_RUN_DEFAULTS.imgsz);
+  quickRunDevice.value = QUICK_RUN_DEFAULTS.device;
+  quickRunLimit.value = String(QUICK_RUN_DEFAULTS.limit);
+  quickRunSkipDetect.checked = QUICK_RUN_DEFAULTS.skipDetect;
+  quickRunSkipTrack.checked = QUICK_RUN_DEFAULTS.skipTrack;
+  quickRunSkipViz.checked = QUICK_RUN_DEFAULTS.skipVisualize;
+  quickRunRerun.checked = QUICK_RUN_DEFAULTS.rerun;
+}
+
+function openQuickRunModal(selectedPaths) {
+  if (!quickRunModal) return;
+  quickRunVideoPaths = selectedPaths.length ? selectedPaths : null;
+  if (quickRunScopeText) {
+    quickRunScopeText.textContent = quickRunVideoPaths
+      ? `Will run on ${quickRunVideoPaths.length} selected video(s).`
+      : "Will run on all videos in this project.";
+  }
+  if (quickRunModalStatus) quickRunModalStatus.textContent = "";
+  applyQuickRunDefaultsToForm();
+  if (
+    quickRunOutputDir &&
+    cachedProjectDetail &&
+    cachedProjectDetail.name === selectedProject &&
+    (cachedProjectDetail.quickrun_output || "").trim()
+  ) {
+    quickRunOutputDir.value = cachedProjectDetail.quickrun_output.trim();
+  }
+  quickRunModal.classList.remove("hidden");
+}
+
+function closeQuickRunModal() {
+  if (quickRunModal) quickRunModal.classList.add("hidden");
+}
+
+function setProjectMetaStatus(msg) {
+  if (projectMetaModalStatus) projectMetaModalStatus.textContent = msg || "";
+}
+
+function openProjectMetaModal(project) {
+  if (!projectMetaModal || !project || !projectCurrently || !projectAbstract || !projectQuickrunOutput) return;
+  if (projectMetaModalTitle) projectMetaModalTitle.textContent = `Project meta: ${project.name}`;
+  if (projectMetaNameLabel) projectMetaNameLabel.textContent = project.name;
+  projectCurrently.value = project.currently || "";
+  projectAbstract.value = project.abstract || "";
+  projectQuickrunOutput.value = project.quickrun_output || "";
+  if (projectSnapshotOutput) {
+    projectSnapshotOutput.value = project.snapshot_output || "";
+  }
+  setProjectMetaStatus("");
+  projectMetaModal.classList.remove("hidden");
+}
+
+function closeProjectMetaModal() {
+  if (projectMetaModal) projectMetaModal.classList.add("hidden");
+}
+
+function collectQuickRunPayload() {
+  const workers = parseInt(quickRunWorkers.value, 10);
+  const window_overlap = parseInt(quickRunWindowOverlap.value, 10);
+  const speed_window = parseInt(quickRunSpeedWindow.value, 10);
+  const frame_skip = parseInt(quickRunFrameSkip.value, 10);
+  const imgsz = parseInt(quickRunImgsz.value, 10);
+  const limit = parseInt(quickRunLimit.value, 10);
+  const conf_thres = parseFloat(quickRunConfThres.value);
+  const iou_thres = parseFloat(quickRunIouThres.value);
+  const fields = [
+    ["workers", workers],
+    ["window overlap", window_overlap],
+    ["speed window", speed_window],
+    ["frame skip", frame_skip],
+    ["imgsz", imgsz],
+    ["limit", limit],
+    ["confidence threshold", conf_thres],
+    ["IoU threshold", iou_thres],
+  ];
+  for (const [label, n] of fields) {
+    if (!Number.isFinite(n)) throw new Error(`${label} must be a valid number.`);
+  }
+  const body = {
+    name: selectedProject,
+    workers,
+    window_overlap,
+    speed_window,
+    output_dir: (quickRunOutputDir.value || "").trim(),
+    weights: (quickRunWeights.value || "").trim(),
+    frame_skip,
+    conf_thres,
+    iou_thres,
+    imgsz,
+    device: (quickRunDevice.value || "").trim(),
+    limit,
+    skip_detect: quickRunSkipDetect.checked,
+    skip_track: quickRunSkipTrack.checked,
+    skip_visualize: quickRunSkipViz.checked,
+    rerun: quickRunRerun.checked,
+  };
+  if (quickRunVideoPaths && quickRunVideoPaths.length) {
+    body.video_paths = quickRunVideoPaths;
+  }
+  return body;
+}
+
+function setStatus(msg) {
+  homeStatus.textContent = msg || "";
+}
+
+async function req(url, options) {
+  const resp = await fetch(url, options);
+  const data = await resp.json();
+  if (!resp.ok || data.error) {
+    throw new Error(data.error || `Request failed: ${resp.status}`);
+  }
+  return data;
+}
+
+function videoRecordPath(rec) {
+  if (typeof rec === "string") return rec;
+  if (rec && rec.absolute_path) return rec.absolute_path;
+  return rec && rec.path ? rec.path : "";
+}
+
+function fmtVideoMetaCell(val) {
+  if (val === null || val === undefined || val === "") return "—";
+  return String(val);
+}
+
+function videoRowSplitText(rec) {
+  const r = typeof rec === "object" && rec ? rec : {};
+  const hasSplit =
+    (r.split_x != null && r.split_x !== "") || (r.split_y != null && r.split_y !== "");
+  if (!hasSplit) return "—";
+  return `${fmtVideoMetaCell(r.split_x)}×${fmtVideoMetaCell(r.split_y)}`;
+}
+
+const VIDEO_TABLE_COLSPAN = 10;
+
+function mkVideoNumTd(val) {
+  const td = document.createElement("td");
+  td.className = "col-num-cell";
+  td.textContent = fmtVideoMetaCell(val);
+  return td;
+}
+
+/** Snapshot class 0/1 counts cell (filled after /api/project/snapshot_label_counts). */
+function mkVideoSnapTdPlaceholder() {
+  const td = document.createElement("td");
+  td.className = "col-num-cell video-snap-cell";
+  td.textContent = "…";
+  td.title = "Loading snapshot label counts…";
+  return td;
+}
+
+/** Green when sum of classes equals Flies, or both class counts equal Flies (e.g. 24/24 vs 24). */
+function snapCountsMatchFlies(c, fly) {
+  if (c == null || !c.has_snapshot) return false;
+  if (fly == null || fly === "") return false;
+  const f = Number(fly);
+  if (!Number.isFinite(f)) return false;
+  if (c.matches_flies === true) return true;
+  const c0 = Number(c.class0);
+  const c1 = Number(c.class1);
+  const t = c.total != null ? Number(c.total) : NaN;
+  if (Number.isFinite(t) && t === f) return true;
+  if (Number.isFinite(c0) && Number.isFinite(c1) && c0 === f && c1 === f) return true;
+  return false;
+}
+
+function applySnapCountsToCell(td, c, emptyTitle) {
+  td.classList.remove("video-snap-match", "video-snap-mismatch");
+  if (!c || !c.has_snapshot) {
+    td.textContent = "—";
+    td.title = emptyTitle;
+    return;
+  }
+  td.textContent = `${c.class0}/${c.class1}`;
+  const fly = c.fly_count;
+  td.title = `Snapshot label: class 0 = ${c.class0}, class 1 = ${c.class1}, sum = ${c.total}. Flies (meta) = ${fly != null ? fly : "—"}. Match: sum equals Flies, or both classes equal Flies.`;
+  if (fly != null && fly !== "") {
+    if (snapCountsMatchFlies(c, fly)) td.classList.add("video-snap-match");
+    else td.classList.add("video-snap-mismatch");
+  }
+}
+
+async function loadSnapshotLabelCounts(projectName) {
+  if (!projectName || !videoList) return;
+  try {
+    const r = await req(
+      `/api/project/snapshot_label_counts?name=${encodeURIComponent(projectName)}`,
+    );
+    if (selectedProject !== projectName) return;
+    const counts = r.counts || {};
+    const clipCounts = r.clip_counts || {};
+    for (const row of videoList.querySelectorAll(
+      "tr.video-row:not(.video-subclip-row)[data-video-path]",
+    )) {
+      const p = row.dataset.videoPath;
+      const td = row.querySelector(".video-snap-cell");
+      if (!td) continue;
+      applySnapCountsToCell(
+        td,
+        counts[p],
+        "No snapshot label indexed for this video (run Snapshot batch)",
+      );
+    }
+    for (const row of videoList.querySelectorAll(
+      "tr.video-subclip-row[data-video-path][data-clip-id]",
+    )) {
+      const p = row.dataset.videoPath;
+      const cid = row.dataset.clipId;
+      const td = row.querySelector(".video-snap-cell");
+      if (!td) continue;
+      const byClip = clipCounts[p] || {};
+      const c = byClip[cid];
+      applySnapCountsToCell(
+        td,
+        c,
+        "No snapshot label for this subclip (run Snapshot with subclip selected)",
+      );
+    }
+  } catch (_err) {
+    for (const td of videoList.querySelectorAll(
+      "tr[data-video-path] .video-snap-cell",
+    )) {
+      td.textContent = "—";
+      td.title = "Could not load snapshot counts";
+    }
+  }
+}
+
+function fillVideoActionsTd(tdAct, path, videoEntry, playbackOverride, resultsOpts) {
+  tdAct.textContent = "";
+  const playBtn = document.createElement("button");
+  playBtn.className = "video-play-btn";
+  playBtn.type = "button";
+  playBtn.textContent = "Play";
+  playBtn.onclick = () => {
+    let fs = null;
+    let fe = null;
+    let labelSuffix;
+    if (playbackOverride) {
+      fs = playbackOverride.frameStart != null ? playbackOverride.frameStart : null;
+      fe = playbackOverride.frameEnd != null ? playbackOverride.frameEnd : null;
+      labelSuffix = playbackOverride.labelSuffix;
+    } else if (typeof videoEntry === "object" && videoEntry) {
+      fs = videoEntry.frame_start != null ? videoEntry.frame_start : null;
+      fe = videoEntry.frame_end != null ? videoEntry.frame_end : null;
+    }
+    openVideoModal(path, { frameStart: fs, frameEnd: fe, labelSuffix }).catch(() => {});
+  };
+  const editBtn = document.createElement("button");
+  editBtn.className = "video-edit-btn";
+  editBtn.type = "button";
+  editBtn.textContent = "Edit";
+      editBtn.onclick = () => {
+        const base = typeof videoEntry === "object" && videoEntry ? videoEntry : { path };
+        openMetaModal(base);
+      };
+  const resultsBtn = document.createElement("button");
+  resultsBtn.className = "video-results-btn";
+  resultsBtn.type = "button";
+  resultsBtn.textContent = "Results";
+  resultsBtn.onclick = () => {
+    const q = new URLSearchParams({ video_path: path });
+    if (selectedProject) q.set("project", selectedProject);
+    const cid =
+      resultsOpts && resultsOpts.clipId != null && String(resultsOpts.clipId).trim() !== ""
+        ? String(resultsOpts.clipId).trim()
+        : "";
+    if (cid) q.set("clip_id", cid);
+    window.location.href = `/video-results?${q.toString()}`;
+  };
+  tdAct.appendChild(playBtn);
+  tdAct.appendChild(editBtn);
+  tdAct.appendChild(resultsBtn);
+}
+
+function buildVideoSubclipRow(parentPath, videoEntry, clip) {
+  const recObj = typeof videoEntry === "object" && videoEntry ? videoEntry : {};
+  const clipLabel =
+    clip.name && String(clip.name).trim() ? String(clip.name).trim() : `Clip ${clip.id}`;
+  const s0 = Number(clip.start);
+  const s1 = Number(clip.end);
+
+  const tr = document.createElement("tr");
+  tr.className = "video-row video-subclip-row";
+  tr.title = `${parentPath} · ${clipLabel}`;
+  tr.dataset.videoPath = parentPath;
+  tr.dataset.clipId = String(clip.id);
+
+  const tdCb = document.createElement("td");
+  tdCb.className = "col-cb";
+  const subCb = document.createElement("input");
+  subCb.type = "checkbox";
+  subCb.className = "video-subclip-select-cb";
+  subCb.dataset.parentPath = parentPath;
+  subCb.dataset.clipId = String(clip.id);
+  subCb.dataset.sourceCsv = clip.source_csv ? String(clip.source_csv) : "";
+  subCb.title = "Select subclip";
+  subCb.addEventListener("change", updateSubclipSelectAllState);
+  tdCb.appendChild(subCb);
+
+  const tdName = document.createElement("td");
+  tdName.className = "col-name-cell video-subclip-name-cell";
+  const titleDiv = document.createElement("div");
+  titleDiv.className = "video-subclip-title";
+  titleDiv.textContent = clipLabel;
+  tdName.appendChild(titleDiv);
+  const metaDiv = document.createElement("div");
+  metaDiv.className = "video-subclip-meta-line";
+  const parentFile = parentPath.split(/[\\/]/).pop() || parentPath;
+  metaDiv.appendChild(document.createTextNode(`↳ ${parentFile}`));
+  if (clip.source_csv) {
+    metaDiv.appendChild(document.createTextNode(" · "));
+    const a = document.createElement("a");
+    const q = new URLSearchParams({ path: clip.source_csv, video_path: parentPath });
+    if (selectedProject) q.set("project", selectedProject);
+    q.set("clip_id", String(clip.id));
+    a.href = `/total-speed-plot?${q.toString()}`;
+    a.textContent = "Plot";
+    a.className = "video-subclip-plot-link";
+    metaDiv.appendChild(a);
+  }
+  tdName.appendChild(metaDiv);
+
+  const tdSplit = document.createElement("td");
+  tdSplit.className = "col-split-cell";
+  tdSplit.textContent = videoRowSplitText(recObj);
+
+  const tdAct = document.createElement("td");
+  tdAct.className = "col-actions-cell";
+  fillVideoActionsTd(
+    tdAct,
+    parentPath,
+    videoEntry,
+    {
+      frameStart: Number.isFinite(s0) ? s0 : null,
+      frameEnd: Number.isFinite(s1) ? s1 : null,
+      labelSuffix: clipLabel,
+    },
+    { clipId: clip.id },
+  );
+
+  tr.appendChild(tdCb);
+  tr.appendChild(tdName);
+  tr.appendChild(mkVideoSnapTdPlaceholder());
+  tr.appendChild(mkVideoNumTd(recObj.disk_pixel));
+  tr.appendChild(mkVideoNumTd(recObj.disk_radius_mm));
+  tr.appendChild(mkVideoNumTd(Number.isFinite(s0) ? Math.round(s0) : null));
+  tr.appendChild(mkVideoNumTd(Number.isFinite(s1) ? Math.round(s1) : null));
+  tr.appendChild(mkVideoNumTd(recObj.fly_count));
+  tr.appendChild(tdSplit);
+  tr.appendChild(tdAct);
+  return tr;
+}
+
+function appendSubclipColspanRow(afterEl, className, message, extraClass) {
+  const tr = document.createElement("tr");
+  tr.className = className;
+  const td = document.createElement("td");
+  td.colSpan = VIDEO_TABLE_COLSPAN;
+  td.className = `video-subclip-status-cell${extraClass ? ` ${extraClass}` : ""}`;
+  td.textContent = message;
+  tr.appendChild(td);
+  afterEl.after(tr);
+  return tr;
+}
+
+/** Subclip / loading / error rows inserted immediately after a main video row. */
+function getVideoRowsUnderMain(mainTr) {
+  const out = [];
+  let el = mainTr.nextElementSibling;
+  while (
+    el
+    && el.tagName === "TR"
+    && (el.classList.contains("video-subclip-row")
+      || el.classList.contains("video-subclip-loading-row")
+      || el.classList.contains("video-subclip-status-row"))
+  ) {
+    out.push(el);
+    el = el.nextElementSibling;
+  }
+  return out;
+}
+
+function updateSubclipFoldIcon(mainTr) {
+  const icon = mainTr.querySelector(".video-subclip-fold-icon");
+  if (!icon) return;
+  const collapsed = mainTr.classList.contains("video-subclips-collapsed");
+  icon.textContent = collapsed ? " ▶" : " ▼";
+}
+
+function setSubclipsFolded(mainTr, folded) {
+  for (const r of getVideoRowsUnderMain(mainTr)) {
+    r.classList.toggle("video-subclip-fold-hidden", folded);
+  }
+  mainTr.classList.toggle("video-subclips-collapsed", folded);
+  mainTr.setAttribute("aria-expanded", folded ? "false" : "true");
+  updateSubclipFoldIcon(mainTr);
+}
+
+function toggleSubclipsFold(mainTr) {
+  setSubclipsFolded(mainTr, !mainTr.classList.contains("video-subclips-collapsed"));
+}
+
+function getMainRowsWithSubclips() {
+  return [...videoList.querySelectorAll("tr.video-row.video-has-subclips")];
+}
+
+function updateVideoColumnFoldHeaderState() {
+  if (!videoColHeader) return;
+  const mains = getMainRowsWithSubclips();
+  if (!mains.length) {
+    videoColHeader.classList.remove("is-clickable");
+    videoColHeader.textContent = "Video";
+    videoColHeader.title = "Video";
+    return;
+  }
+  const anyExpanded = mains.some((tr) => !tr.classList.contains("video-subclips-collapsed"));
+  videoColHeader.classList.add("is-clickable");
+  videoColHeader.textContent = anyExpanded ? "Video ▼" : "Video ▶";
+  videoColHeader.title = anyExpanded
+    ? "Click to fold all sub-clips"
+    : "Click to unfold all sub-clips";
+}
+
+function setAllSubclipsFolded(folded) {
+  for (const tr of getMainRowsWithSubclips()) {
+    setSubclipsFolded(tr, folded);
+  }
+  updateVideoColumnFoldHeaderState();
+}
+
+function toggleAllSubclipsFold() {
+  const mains = getMainRowsWithSubclips();
+  if (!mains.length) return;
+  const anyExpanded = mains.some((tr) => !tr.classList.contains("video-subclips-collapsed"));
+  setAllSubclipsFolded(anyExpanded);
+}
+
+function onMainVideoRowFoldClick(e) {
+  const tr = e.currentTarget;
+  if (!tr.classList.contains("video-has-subclips")) return;
+  if (e.target.closest("input, button, a, label")) return;
+  toggleSubclipsFold(tr);
+  updateVideoColumnFoldHeaderState();
+}
+
+/** Main rows with subclips: fold affordance, row click toggles visibility (starts collapsed). */
+function enableVideoSubclipFolding(mainTr, parentPath) {
+  mainTr.classList.add("video-has-subclips");
+  mainTr.setAttribute("aria-expanded", "false");
+  const hint = " · Click row (outside buttons/checkbox) to show or hide subclips.";
+  mainTr.title = (mainTr.title || parentPath || "").replace(/\s*· Click row[^\n]*$/, "") + hint;
+
+  const nameTd = mainTr.querySelector(".col-name-cell");
+  if (nameTd && !nameTd.querySelector(".video-subclip-fold-icon")) {
+    const icon = document.createElement("span");
+    icon.className = "video-subclip-fold-icon";
+    icon.setAttribute("aria-hidden", "true");
+    nameTd.appendChild(icon);
+  }
+
+  if (!mainTr.dataset.subclipFoldBound) {
+    mainTr.dataset.subclipFoldBound = "1";
+    mainTr.addEventListener("click", onMainVideoRowFoldClick);
+  }
+
+  setSubclipsFolded(mainTr, true);
+  updateVideoColumnFoldHeaderState();
+}
+
+async function loadVideoSubclipsAfterMainRow(mainTr, parentPath, videoEntry) {
+  const proj = selectedProject;
+  const loadingTr = document.createElement("tr");
+  loadingTr.className = "video-subclip-loading-row";
+  const loadingTd = document.createElement("td");
+  loadingTd.colSpan = VIDEO_TABLE_COLSPAN;
+  loadingTd.className = "video-subclip-status-cell";
+  loadingTd.textContent = "Loading subclips…";
+  loadingTr.appendChild(loadingTd);
+  mainTr.after(loadingTr);
+
+  if (!proj) {
+    loadingTr.remove();
+    return;
+  }
+
+  try {
+    const resp = await fetch(
+      `/api/project/video_subclips?name=${encodeURIComponent(proj)}&video_path=${encodeURIComponent(parentPath)}`,
+    );
+    const data = await resp.json();
+    loadingTr.remove();
+
+    if (!resp.ok || data.error) {
+      appendSubclipColspanRow(
+        mainTr,
+        "video-subclip-status-row",
+        data.error || "Could not load subclips.",
+        "video-subclips-empty",
+      );
+      updateSubclipSelectAllState();
+      return;
+    }
+
+    const clips = data.clips || [];
+    if (!clips.length) {
+      updateSubclipSelectAllState();
+      return;
+    }
+
+    let insertAfter = mainTr;
+    for (const c of clips) {
+      const row = buildVideoSubclipRow(parentPath, videoEntry, c);
+      insertAfter.after(row);
+      insertAfter = row;
+    }
+    enableVideoSubclipFolding(mainTr, parentPath);
+    updateSubclipSelectAllState();
+  } catch (_e) {
+    loadingTr.remove();
+    appendSubclipColspanRow(mainTr, "video-subclip-status-row", "Failed to load subclips.", "video-subclips-empty");
+    updateSubclipSelectAllState();
+  }
+}
+
+function setMetaStatus(msg) {
+  metaModalStatus.textContent = msg || "";
+}
+
+function intOrNullInput(el) {
+  const t = (el.value || "").trim();
+  if (t === "") return null;
+  const n = parseInt(t, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function floatOrNullInput(el) {
+  const t = (el.value || "").trim();
+  if (t === "") return null;
+  const n = parseFloat(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+function displayOpt(n) {
+  if (n === null || n === undefined) return "";
+  return String(n);
+}
+
+async function fetchVideoInfo(videoPath) {
+  const resp = await fetch(`/api/video_info_by_path?video_path=${encodeURIComponent(videoPath)}`);
+  const data = await resp.json();
+  if (!resp.ok || data.error) {
+    throw new Error(data.error || "Failed to read video");
+  }
+  const fps = typeof data.fps === "number" && Number.isFinite(data.fps) ? data.fps : 0;
+  const frame_count =
+    typeof data.frame_count === "number" && Number.isFinite(data.frame_count)
+      ? data.frame_count
+      : parseInt(data.frame_count, 10) || 0;
+  let w = null;
+  let h = null;
+  if (data.width != null && data.width !== "") {
+    const nw = Number(data.width);
+    if (Number.isFinite(nw) && nw > 0) w = nw;
+  }
+  if (data.height != null && data.height !== "") {
+    const nh = Number(data.height);
+    if (Number.isFinite(nh) && nh > 0) h = nh;
+  }
+  return { frame_count, fps, width: w, height: h };
+}
+
+async function fetchVideoFrameCount(videoPath) {
+  const info = await fetchVideoInfo(videoPath);
+  return info.frame_count ?? 0;
+}
+
+function asPlaybackFrame(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Map 1-based inclusive frame indices to [t0, t1] seconds (clip speed CSV uses same convention).
+ * Returns null when both bounds are unspecified (play entire file).
+ */
+function computePlaybackTimes(duration, fpsApi, totalFrames, frameStart, frameEnd) {
+  if (!Number.isFinite(duration) || duration <= 0) return null;
+  const fs = asPlaybackFrame(frameStart);
+  let fe = asPlaybackFrame(frameEnd);
+  if (fe != null && fe < 1) fe = null;
+  if (fs == null && fe == null) return null;
+
+  let effFps = fpsApi > 1e-6 ? fpsApi : null;
+  if (effFps == null && totalFrames > 0 && duration > 0) effFps = totalFrames / duration;
+  if (effFps == null || effFps <= 1e-6) effFps = 30;
+
+  const fStart = fs != null ? fs : 1;
+  const t0 = Math.max(0, (fStart - 1) / effFps);
+  let t1;
+  if (fe != null) {
+    t1 = fe / effFps;
+  } else {
+    t1 = duration;
+  }
+  t1 = Math.min(duration, Math.max(t0 + 1 / effFps * 0.05, t1));
+  if (t1 - t0 < 1e-3) return null;
+  const fullSpan = duration <= 1e-6 ? true : t0 <= 1e-3 && t1 >= duration - 1e-3;
+  if (fullSpan) return null;
+  return { t0, t1, effFps };
+}
+
+function clearVideoPlaybackGuards() {
+  if (videoPlaybackTimeHandler) {
+    videoModalPlayer.removeEventListener("timeupdate", videoPlaybackTimeHandler);
+    videoPlaybackTimeHandler = null;
+  }
+}
+
+function attachPlaybackWindow(t0, t1) {
+  clearVideoPlaybackGuards();
+  const dur = Number.isFinite(videoModalPlayer.duration) ? videoModalPlayer.duration : t1;
+  const start = Math.min(Math.max(0, t0), dur);
+  const end = Math.min(Math.max(start + 1e-4, t1), dur);
+  videoModalPlayer.currentTime = start;
+  videoPlaybackTimeHandler = () => {
+    const ct = videoModalPlayer.currentTime;
+    if (!Number.isFinite(ct)) return;
+    if (ct >= end - 0.02) {
+      videoModalPlayer.pause();
+      try {
+        videoModalPlayer.currentTime = Math.min(end, dur);
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+  };
+  videoModalPlayer.addEventListener("timeupdate", videoPlaybackTimeHandler);
+}
+
+/** Pause at endSec when Media Fragments handle start but not stop (or no fragment). */
+function attachPlaybackEndPause(endSec, fullDuration) {
+  clearVideoPlaybackGuards();
+  const dur = Number.isFinite(fullDuration) ? fullDuration : endSec;
+  const end = Math.min(Math.max(endSec, 0), dur);
+  videoPlaybackTimeHandler = () => {
+    const ct = videoModalPlayer.currentTime;
+    if (!Number.isFinite(ct)) return;
+    if (ct >= end - 0.025) {
+      videoModalPlayer.pause();
+      try {
+        videoModalPlayer.currentTime = Math.min(end, dur);
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+  };
+  videoModalPlayer.addEventListener("timeupdate", videoPlaybackTimeHandler);
+}
+
+function fillMetaFormFromRecord(rec) {
+  const p = videoRecordPath(rec);
+  const abs = typeof rec === "object" && rec && rec.absolute_path ? rec.absolute_path : p;
+  videoMetaModalTitle.textContent = p.split(/[\\/]/).pop() || "Video metadata";
+  videoMetaPathLabel.textContent = abs;
+  metaDiskPixel.value = displayOpt(rec.disk_pixel);
+  metaDiskRadiusMm.value = displayOpt(rec.disk_radius_mm);
+  metaFrameStart.value = displayOpt(rec.frame_start);
+  metaFrameEnd.value = displayOpt(rec.frame_end);
+  metaFlyCount.value = displayOpt(rec.fly_count);
+  metaSplitX.value = displayOpt(rec.split_x);
+  metaSplitY.value = displayOpt(rec.split_y);
+  metaDetailedLocation.value = rec.detailed_location || "";
+  metaTotalFrames.value = rec.total_frames != null ? String(rec.total_frames) : "";
+  if (metaVideoWidth) metaVideoWidth.value = rec.video_width != null ? String(rec.video_width) : "";
+  if (metaVideoHeight) metaVideoHeight.value = rec.video_height != null ? String(rec.video_height) : "";
+}
+
+function closeMetaModal() {
+  editingVideoPath = "";
+  videoMetaModal.classList.add("hidden");
+  setMetaStatus("");
+}
+
+function openMetaModal(rec) {
+  const p = videoRecordPath(rec);
+  if (!p) return;
+  editingVideoPath = p;
+  const base = typeof rec === "object" && rec ? rec : { path: p };
+  fillMetaFormFromRecord(base);
+  videoMetaModal.classList.remove("hidden");
+  setMetaStatus("");
+  if (
+    base.total_frames == null
+    || base.video_width == null
+    || base.video_height == null
+  ) {
+    void detectVideoStreamMeta();
+  }
+}
+
+function updateVideoSelectAllState() {
+  const boxes = videoList.querySelectorAll(".video-select-cb");
+  const list = [...boxes];
+  const n = list.length;
+  const checked = list.filter((c) => c.checked).length;
+  videoSelectAll.checked = n > 0 && checked === n;
+  videoSelectAll.indeterminate = checked > 0 && checked < n;
+}
+
+function updateSubclipSelectAllState() {
+  if (!videoSubclipSelectAll) return;
+  const boxes = videoList.querySelectorAll(".video-subclip-select-cb");
+  const list = [...boxes];
+  const n = list.length;
+  if (n === 0) {
+    videoSubclipSelectAll.checked = false;
+    videoSubclipSelectAll.indeterminate = false;
+    return;
+  }
+  const checked = list.filter((c) => c.checked).length;
+  videoSubclipSelectAll.checked = checked === n;
+  videoSubclipSelectAll.indeterminate = checked > 0 && checked < n;
+}
+
+/** Targets for snapshot batch: main videos + subclips (with csv + clip id). */
+function collectSnapshotBatchItems() {
+  const items = [];
+  for (const c of videoList.querySelectorAll(".video-select-cb:checked")) {
+    const p = c.dataset.path;
+    if (p) items.push({ type: "video", video_path: p });
+  }
+  for (const c of videoList.querySelectorAll(".video-subclip-select-cb:checked")) {
+    const vp = c.dataset.parentPath;
+    const cid = c.dataset.clipId;
+    const src = (c.dataset.sourceCsv || "").trim();
+    if (!vp || !cid) continue;
+    if (!src) continue;
+    const n = parseInt(cid, 10);
+    if (!Number.isFinite(n)) continue;
+    items.push({
+      type: "subclip",
+      video_path: vp,
+      source_csv: src,
+      clip_id: n,
+    });
+  }
+  return items;
+}
+
+/** Parent video paths from checked main rows and checked subclip rows (deduped). */
+function collectSelectedVideoPathsUnion() {
+  const fromMain = [...videoList.querySelectorAll(".video-select-cb:checked")]
+    .map((c) => c.dataset.path)
+    .filter(Boolean);
+  const fromSubclips = [...videoList.querySelectorAll(".video-subclip-select-cb:checked")]
+    .map((c) => c.dataset.parentPath)
+    .filter(Boolean);
+  return [...new Set([...fromMain, ...fromSubclips])];
+}
+
+function resetBatchSelectHeaders() {
+  videoSelectAll.checked = false;
+  videoSelectAll.indeterminate = false;
+  if (videoSubclipSelectAll) {
+    videoSubclipSelectAll.checked = false;
+    videoSubclipSelectAll.indeterminate = false;
+  }
+}
+
+async function detectVideoStreamMeta() {
+  if (!editingVideoPath) return;
+  setMetaStatus("Detecting frames and resolution…");
+  try {
+    const info = await fetchVideoInfo(editingVideoPath);
+    const fc = info.frame_count ?? 0;
+    metaTotalFrames.value = fc > 0 ? String(fc) : "";
+    if (metaVideoWidth) {
+      metaVideoWidth.value = info.width != null ? String(info.width) : "";
+    }
+    if (metaVideoHeight) {
+      metaVideoHeight.value = info.height != null ? String(info.height) : "";
+    }
+    const bits = [];
+    if (fc > 0) bits.push(`${fc} frames`);
+    if (info.width != null && info.height != null) bits.push(`${info.width}×${info.height} px`);
+    setMetaStatus(bits.length ? `Detected: ${bits.join(" · ")}.` : "Could not read frame count or resolution.");
+  } catch (err) {
+    setMetaStatus(err.message || "Detection failed.");
+  }
+}
+
+function renderProjectList() {
+  projectList.innerHTML = "";
+  if (!projects.length) {
+    projectList.textContent = "No projects yet.";
+    return;
+  }
+  for (const p of projects) {
+    const row = document.createElement("div");
+    row.className = "project-row" + (p.name === selectedProject ? " selected" : "");
+
+    const nameBtn = document.createElement("button");
+    nameBtn.className = "project-name-btn";
+    nameBtn.textContent = `${p.name} (${p.video_count || 0} videos)`;
+    nameBtn.onclick = () => loadProjectDetail(p.name);
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "project-del-btn";
+    delBtn.textContent = "Delete";
+    delBtn.onclick = async () => {
+      const ok = window.confirm(`Delete project "${p.name}"?`);
+      if (!ok) return;
+      try {
+        await req("/api/projects", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: p.name }),
+        });
+        if (selectedProject === p.name) {
+          selectedProject = "";
+          renderProjectDetail(null);
+        }
+        await refreshProjects();
+        setStatus(`Deleted project: ${p.name}`);
+      } catch (err) {
+        setStatus(err.message);
+      }
+    };
+
+    const metaBtn = document.createElement("button");
+    metaBtn.className = "project-meta-btn";
+    metaBtn.type = "button";
+    metaBtn.textContent = "Meta";
+    metaBtn.onclick = async () => {
+      try {
+        const r = await req(`/api/project?name=${encodeURIComponent(p.name)}`);
+        selectedProject = p.name;
+        renderProjectList();
+        renderProjectDetail(r.project);
+        openProjectMetaModal(r.project);
+      } catch (err) {
+        setStatus(err.message);
+      }
+    };
+
+    row.appendChild(nameBtn);
+    row.appendChild(metaBtn);
+    row.appendChild(delBtn);
+    projectList.appendChild(row);
+  }
+}
+
+function renderProjectDetail(project) {
+  cachedProjectDetail = project || null;
+  if (!project) {
+    detailTitle.textContent = "No project selected";
+    detailLabInfo.value = "";
+    detailLabInfo.disabled = true;
+    saveLabInfoBtn.disabled = true;
+    videoBatchBar.classList.add("hidden");
+    videoTableWrap.classList.add("hidden");
+    videoListEmpty.classList.remove("hidden");
+    videoListEmpty.textContent = "No videos.";
+    resetBatchSelectHeaders();
+    videoList.innerHTML = "";
+    updateVideoColumnFoldHeaderState();
+    return;
+  }
+  detailTitle.textContent = `Project: ${project.name}`;
+  detailLabInfo.value = project.lab_info || "";
+  detailLabInfo.disabled = false;
+  saveLabInfoBtn.disabled = false;
+  const videos = project.videos || [];
+  if (!videos.length) {
+    videoBatchBar.classList.add("hidden");
+    videoTableWrap.classList.add("hidden");
+    videoListEmpty.classList.remove("hidden");
+    videoListEmpty.textContent = "No videos.";
+    resetBatchSelectHeaders();
+    videoList.innerHTML = "";
+    updateVideoColumnFoldHeaderState();
+  } else {
+    videoBatchBar.classList.remove("hidden");
+    videoTableWrap.classList.remove("hidden");
+    videoListEmpty.classList.add("hidden");
+    resetBatchSelectHeaders();
+    videoList.innerHTML = "";
+    updateVideoColumnFoldHeaderState();
+    const subPromises = [];
+    for (const v of videos) {
+      const path = videoRecordPath(v);
+      const recObj = typeof v === "object" && v ? v : {};
+      const tr = document.createElement("tr");
+      tr.className = "video-row";
+      tr.title = path;
+
+      const tdCb = document.createElement("td");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "video-select-cb";
+      cb.dataset.path = path;
+      cb.addEventListener("change", updateVideoSelectAllState);
+      tdCb.appendChild(cb);
+
+      const tdName = document.createElement("td");
+      tdName.className = "col-name-cell";
+      tdName.textContent = path.split(/[\\/]/).pop() || path;
+
+      const tdSnap = mkVideoSnapTdPlaceholder();
+
+      const tdSplit = document.createElement("td");
+      tdSplit.className = "col-split-cell";
+      tdSplit.textContent = videoRowSplitText(recObj);
+
+      const tdAct = document.createElement("td");
+      tdAct.className = "col-actions-cell";
+      fillVideoActionsTd(tdAct, path, v);
+
+      tr.dataset.videoPath = path;
+      tr.appendChild(tdCb);
+      tr.appendChild(tdName);
+      tr.appendChild(tdSnap);
+      tr.appendChild(mkVideoNumTd(recObj.disk_pixel));
+      tr.appendChild(mkVideoNumTd(recObj.disk_radius_mm));
+      tr.appendChild(mkVideoNumTd(recObj.frame_start));
+      tr.appendChild(mkVideoNumTd(recObj.frame_end));
+      tr.appendChild(mkVideoNumTd(recObj.fly_count));
+      tr.appendChild(tdSplit);
+      tr.appendChild(tdAct);
+      videoList.appendChild(tr);
+
+      subPromises.push(loadVideoSubclipsAfterMainRow(tr, path, v));
+    }
+    void (async () => {
+      await Promise.all(subPromises);
+      updateVideoColumnFoldHeaderState();
+      await loadSnapshotLabelCounts(project.name);
+    })();
+  }
+}
+
+function videoModalIsFullscreen() {
+  const fs =
+    document.fullscreenElement
+    || document.webkitFullscreenElement
+    || document.mozFullScreenElement
+    || document.msFullscreenElement;
+  return fs === videoModalStage || fs === videoModalPlayer;
+}
+
+function syncVideoFullscreenButtonLabel() {
+  if (!videoFullscreenBtn) return;
+  videoFullscreenBtn.textContent = videoModalIsFullscreen() ? "Exit fullscreen" : "Fullscreen";
+  resizeVideoMeasureCanvas();
+}
+
+async function toggleVideoModalFullscreen() {
+  const stage = videoModalStage;
+  const v = videoModalPlayer;
+  const target = stage || v;
+  try {
+    if (videoModalIsFullscreen()) {
+      if (document.exitFullscreen) await document.exitFullscreen();
+      else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+      else if (document.mozCancelFullScreen) await document.mozCancelFullScreen();
+      else if (document.msExitFullscreen) await document.msExitFullscreen();
+    } else if (target.requestFullscreen) {
+      await target.requestFullscreen();
+    } else if (target.webkitRequestFullscreen) {
+      target.webkitRequestFullscreen();
+    } else if (target.mozRequestFullScreen) {
+      target.mozRequestFullScreen();
+    } else if (target.msRequestFullscreen) {
+      target.msRequestFullscreen();
+    } else if (v.webkitEnterFullscreen) {
+      v.webkitEnterFullscreen();
+    }
+  } catch (_err) {
+    /* ignore */
+  }
+  syncVideoFullscreenButtonLabel();
+}
+
+async function openVideoModal(videoPath, opts = {}) {
+  clearVideoPlaybackGuards();
+  resetVideoMeasure();
+  const name = String(videoPath).split(/[\\/]/).pop() || "Video";
+  const suffix = opts.labelSuffix ? ` · ${opts.labelSuffix}` : "";
+  videoModalTitle.textContent = `${name}${suffix}`;
+  videoModalPlayer.pause();
+  const baseSrc = `/api/video_file_by_path?video_path=${encodeURIComponent(videoPath)}`;
+  videoModalPlayer.src = baseSrc;
+  videoModal.classList.remove("hidden");
+  syncVideoFullscreenButtonLabel();
+
+  const frameStart = opts.frameStart != null ? opts.frameStart : null;
+  const frameEnd = opts.frameEnd != null ? opts.frameEnd : null;
+
+  videoModalPlayer.onloadedmetadata = () => {
+    void (async () => {
+      resizeVideoMeasureCanvas();
+      try {
+        const info = await fetchVideoInfo(videoPath);
+        const duration = videoModalPlayer.duration;
+        const metaTf =
+          opts.cachedTotalFrames != null && Number.isFinite(Number(opts.cachedTotalFrames))
+            ? Number(opts.cachedTotalFrames)
+            : null;
+        const tf =
+          info.frame_count > 0 ? info.frame_count : metaTf != null && metaTf > 0 ? metaTf : null;
+        const win = computePlaybackTimes(duration, info.fps, tf, frameStart, frameEnd);
+        const srcHasFrag = String(videoModalPlayer.src || "").includes("#t=");
+
+        if (win && !srcHasFrag) {
+          videoModalPlayer.pause();
+          videoModalPlayer.src = `${baseSrc}#t=${win.t0.toFixed(4)},${win.t1.toFixed(4)}`;
+          videoModalPlayer.load();
+          return;
+        }
+
+        if (win && srcHasFrag) {
+          clearVideoPlaybackGuards();
+          requestAnimationFrame(() => {
+            const ct = videoModalPlayer.currentTime;
+            const startedInClip =
+              Number.isFinite(ct) && ct >= win.t0 - 0.35 && ct <= win.t1 + 0.35;
+            if (startedInClip) {
+              attachPlaybackEndPause(win.t1, duration);
+            } else {
+              attachPlaybackWindow(win.t0, win.t1);
+            }
+          });
+        } else if (!win) {
+          clearVideoPlaybackGuards();
+          videoModalPlayer.currentTime = 0;
+        }
+      } catch (_err) {
+        clearVideoPlaybackGuards();
+        videoModalPlayer.currentTime = 0;
+      }
+      resizeVideoMeasureCanvas();
+      videoModalPlayer.play().catch(() => {});
+    })();
+  };
+
+  requestAnimationFrame(() => resizeVideoMeasureCanvas());
+}
+
+function closeVideoModal() {
+  if (videoModalIsFullscreen()) {
+    if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+    else if (document.msExitFullscreen) document.msExitFullscreen();
+  }
+  clearVideoPlaybackGuards();
+  resetVideoMeasure();
+  videoModalPlayer.onloadedmetadata = null;
+  videoModalPlayer.pause();
+  videoModalPlayer.removeAttribute("src");
+  videoModalPlayer.load();
+  videoModal.classList.add("hidden");
+  syncVideoFullscreenButtonLabel();
+}
+
+async function loadProjectDetail(name) {
+  try {
+    const r = await req(`/api/project?name=${encodeURIComponent(name)}`);
+    selectedProject = name;
+    renderProjectList();
+    renderProjectDetail(r.project);
+  } catch (err) {
+    setStatus(err.message);
+  }
+}
+
+async function refreshProjects() {
+  const r = await req("/api/projects");
+  projects = r.projects || [];
+  renderProjectList();
+}
+
+createProjectBtn.onclick = async () => {
+  const name = (projectNameInput.value || "").trim();
+  const lab_info = (labInfoInput.value || "").trim();
+  if (!name) {
+    setStatus("Project name is required.");
+    return;
+  }
+  try {
+    await req("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, lab_info }),
+    });
+    projectNameInput.value = "";
+    labInfoInput.value = "";
+    await refreshProjects();
+    await loadProjectDetail(name);
+    setStatus(`Created project: ${name}`);
+  } catch (err) {
+    setStatus(err.message);
+  }
+};
+
+saveLabInfoBtn.onclick = async () => {
+  if (!selectedProject) return;
+  try {
+    await req("/api/project/lab_info", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: selectedProject,
+        lab_info: (detailLabInfo.value || "").trim(),
+      }),
+    });
+    await refreshProjects();
+    await loadProjectDetail(selectedProject);
+    setStatus(`Saved lab info for: ${selectedProject}`);
+  } catch (err) {
+    setStatus(err.message);
+  }
+};
+
+addDirBtn.onclick = async () => {
+  if (!selectedProject) {
+    setStatus("Select a project first.");
+    return;
+  }
+  const directory = (videoDirInput.value || "").trim();
+  if (!directory) {
+    setStatus("Directory path is required.");
+    return;
+  }
+  try {
+    const r = await req("/api/project/videos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: selectedProject, mode: "directory", directory }),
+    });
+    await refreshProjects();
+    renderProjectDetail(r.project);
+    setStatus(`Added ${r.added} video(s) from directory.`);
+  } catch (err) {
+    setStatus(err.message);
+  }
+};
+
+addPathsBtn.onclick = async () => {
+  if (!selectedProject) {
+    setStatus("Select a project first.");
+    return;
+  }
+  const lines = (videoPathsInput.value || "")
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!lines.length) {
+    setStatus("Enter at least one video path.");
+    return;
+  }
+  try {
+    const r = await req("/api/project/videos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: selectedProject, mode: "paths", paths: lines }),
+    });
+    await refreshProjects();
+    renderProjectDetail(r.project);
+    setStatus(`Added ${r.added} video(s) by paths.`);
+  } catch (err) {
+    setStatus(err.message);
+  }
+};
+
+refreshProjectsBtn.onclick = () => {
+  refreshProjects().catch((err) => setStatus(err.message));
+};
+
+videoSelectAll.onchange = () => {
+  const on = videoSelectAll.checked;
+  videoList.querySelectorAll(".video-select-cb").forEach((c) => {
+    c.checked = on;
+  });
+  videoSelectAll.indeterminate = false;
+};
+
+if (videoColHeader) {
+  videoColHeader.onclick = () => {
+    toggleAllSubclipsFold();
+  };
+}
+updateVideoColumnFoldHeaderState();
+
+if (videoSubclipSelectAll) {
+  videoSubclipSelectAll.onchange = () => {
+    const boxes = videoList.querySelectorAll(".video-subclip-select-cb");
+    if (!boxes.length) {
+      videoSubclipSelectAll.checked = false;
+      videoSubclipSelectAll.indeterminate = false;
+      return;
+    }
+    const on = videoSubclipSelectAll.checked;
+    boxes.forEach((c) => {
+      c.checked = on;
+    });
+    videoSubclipSelectAll.indeterminate = false;
+  };
+}
+
+batchDeleteVideosBtn.onclick = async () => {
+  if (!selectedProject) return;
+  const paths = collectSelectedVideoPathsUnion();
+  if (!paths.length) {
+    setStatus("Select at least one video or subclip to delete.");
+    return;
+  }
+  const ok = window.confirm(
+    `Remove ${paths.length} video(s) from this project (including parents of selected subclips)? Files on disk are not deleted.`,
+  );
+  if (!ok) return;
+  try {
+    const r = await req("/api/project/videos", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: selectedProject, video_paths: paths }),
+    });
+    await refreshProjects();
+    renderProjectDetail(r.project);
+    setStatus(`Removed ${r.removed} video(s) from project.`);
+  } catch (err) {
+    setStatus(err.message);
+  }
+};
+
+quickRunFastviewBtn.onclick = () => {
+  if (!selectedProject) {
+    setStatus("Select a project first.");
+    return;
+  }
+  if (!quickRunModal) {
+    setStatus("QuickRun dialog is unavailable.");
+    return;
+  }
+  const checked = collectSelectedVideoPathsUnion();
+  openQuickRunModal(checked);
+};
+
+if (snapshotBatchBtn) {
+  snapshotBatchBtn.onclick = async () => {
+    if (!selectedProject) {
+      setStatus("Select a project first.");
+      return;
+    }
+    const items = collectSnapshotBatchItems();
+    if (items === null) return;
+    if (!items.length) {
+      setStatus("Select at least one video and/or subclip for snapshot batch.");
+      return;
+    }
+    setStatus("Starting snapshot batch (queued like QuickRun)…");
+    try {
+      const r = await req("/api/project/snapshot_batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: selectedProject, items }),
+      });
+      const dest = r.quickrun_url || `/quickrun?session=${encodeURIComponent(r.session_id)}`;
+      window.location.href = dest;
+    } catch (err) {
+      setStatus(err.message || "Snapshot batch failed.");
+    }
+  };
+}
+
+if (quickRunStartBtn) {
+  quickRunStartBtn.onclick = async () => {
+    if (!selectedProject) return;
+    if (quickRunModalStatus) quickRunModalStatus.textContent = "Starting…";
+    try {
+      const body = collectQuickRunPayload();
+      const r = await req("/api/quickrun/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      closeQuickRunModal();
+      const dest = r.quickrun_url || `/quickrun?session=${encodeURIComponent(r.session_id)}`;
+      window.location.href = dest;
+    } catch (err) {
+      if (quickRunModalStatus) quickRunModalStatus.textContent = err.message || "Failed.";
+      else setStatus(err.message);
+    }
+  };
+}
+
+if (quickRunResetDefaultsBtn) {
+  quickRunResetDefaultsBtn.onclick = () => applyQuickRunDefaultsToForm();
+}
+
+if (closeQuickRunModalBtn) {
+  closeQuickRunModalBtn.onclick = closeQuickRunModal;
+}
+
+if (quickRunModal) {
+  quickRunModal.onclick = (e) => {
+    if (e.target === quickRunModal) closeQuickRunModal();
+  };
+}
+
+importVideoMetaTsvBtn.onclick = async () => {
+  if (!selectedProject) {
+    setStatus("Select a project first.");
+    return;
+  }
+  const tsv_path = (videoMetaTsvPath.value || "").trim();
+  if (!tsv_path) {
+    setStatus("Enter the path to the TSV file.");
+    return;
+  }
+  try {
+    const r = await req("/api/project/import_video_meta_tsv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: selectedProject, tsv_path }),
+    });
+    await refreshProjects();
+    renderProjectDetail(r.project);
+    const unk = r.unknown_count ? `; ${r.unknown_count} row(s) had no matching video by filename` : "";
+    setStatus(`TSV import: updated ${r.entries_updated} video entr(y/ies)${unk}.`);
+  } catch (err) {
+    setStatus(err.message);
+  }
+};
+
+exportVideoMetaTsvBtn.onclick = async () => {
+  if (!selectedProject) {
+    setStatus("Select a project first.");
+    return;
+  }
+  const tsv_path = (videoMetaTsvPath.value || "").trim();
+  if (!tsv_path) {
+    setStatus("Enter the path for the TSV file to write.");
+    return;
+  }
+  try {
+    const r = await req("/api/project/export_video_meta_tsv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: selectedProject, tsv_path }),
+    });
+    await refreshProjects();
+    setStatus(`Saved ${r.row_count} row(s) to ${r.written}`);
+  } catch (err) {
+    setStatus(err.message);
+  }
+};
+
+closeVideoModalBtn.onclick = closeVideoModal;
+if (videoMeasureToggleBtn) {
+  videoMeasureToggleBtn.onclick = () => setVideoMeasureMode(!videoMeasureMode);
+}
+if (videoMeasureClearBtn) {
+  videoMeasureClearBtn.onclick = () => {
+    videoMeasurePoints = [];
+    drawVideoMeasureOverlay();
+  };
+}
+if (videoMeasureCanvas) {
+  videoMeasureCanvas.addEventListener("mousedown", (e) => {
+    if (!videoMeasureMode) return;
+    const hit = findMeasureHitIndex(e.clientX, e.clientY);
+    if (hit >= 0) {
+      videoMeasureDragIdx = hit;
+      e.preventDefault();
+      return;
+    }
+    const nat = clientToNativeMeasure(e.clientX, e.clientY);
+    if (nat) {
+      videoMeasurePoints.push(nat);
+      e.preventDefault();
+      drawVideoMeasureOverlay();
+    }
+  });
+  videoMeasureCanvas.addEventListener("mousemove", (e) => {
+    if (!videoMeasureMode || videoMeasureDragIdx < 0) return;
+    const nat = clientToNativeMeasure(e.clientX, e.clientY);
+    if (nat) {
+      videoMeasurePoints[videoMeasureDragIdx] = nat;
+      drawVideoMeasureOverlay();
+    }
+  });
+}
+window.addEventListener("mouseup", () => {
+  videoMeasureDragIdx = -1;
+});
+if (videoModalStage && typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(() => resizeVideoMeasureCanvas()).observe(videoModalStage);
+}
+videoFullscreenBtn.onclick = () => {
+  toggleVideoModalFullscreen();
+};
+document.addEventListener("fullscreenchange", syncVideoFullscreenButtonLabel);
+document.addEventListener("webkitfullscreenchange", syncVideoFullscreenButtonLabel);
+document.addEventListener("mozfullscreenchange", syncVideoFullscreenButtonLabel);
+document.addEventListener("MSFullscreenChange", syncVideoFullscreenButtonLabel);
+videoModal.onclick = (e) => {
+  if (e.target === videoModal) closeVideoModal();
+};
+closeVideoMetaModalBtn.onclick = closeMetaModal;
+videoMetaModal.onclick = (e) => {
+  if (e.target === videoMetaModal) closeMetaModal();
+};
+if (closeProjectMetaModalBtn) closeProjectMetaModalBtn.onclick = closeProjectMetaModal;
+if (projectMetaModal) {
+  projectMetaModal.onclick = (e) => {
+    if (e.target === projectMetaModal) closeProjectMetaModal();
+  };
+}
+if (projectMetaSaveBtn) {
+  projectMetaSaveBtn.onclick = async () => {
+    if (!selectedProject) return;
+    setProjectMetaStatus("Saving…");
+    try {
+      const r = await req("/api/project/meta", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: selectedProject,
+          currently: (projectCurrently && projectCurrently.value) || "",
+          abstract: (projectAbstract && projectAbstract.value) || "",
+          quickrun_output: (projectQuickrunOutput && projectQuickrunOutput.value) || "",
+          snapshot_output: (projectSnapshotOutput && projectSnapshotOutput.value) || "",
+        }),
+      });
+      await refreshProjects();
+      renderProjectDetail(r.project);
+      setProjectMetaStatus("Saved.");
+      setTimeout(() => closeProjectMetaModal(), 400);
+    } catch (err) {
+      setProjectMetaStatus(err.message || "Save failed.");
+    }
+  };
+}
+metaDetectFramesBtn.onclick = () => {
+  detectVideoStreamMeta();
+};
+metaSaveBtn.onclick = async () => {
+  if (!selectedProject || !editingVideoPath) return;
+  setMetaStatus("Saving…");
+  try {
+    const meta = {
+      disk_pixel: floatOrNullInput(metaDiskPixel),
+      disk_radius_mm: floatOrNullInput(metaDiskRadiusMm),
+      frame_start: intOrNullInput(metaFrameStart),
+      frame_end: intOrNullInput(metaFrameEnd),
+      fly_count: intOrNullInput(metaFlyCount),
+      detailed_location: (metaDetailedLocation.value || "").trim(),
+      split_x: intOrNullInput(metaSplitX),
+      split_y: intOrNullInput(metaSplitY),
+    };
+    if ((metaTotalFrames.value || "").trim() !== "") {
+      meta.total_frames = intOrNullInput(metaTotalFrames);
+    }
+    if (metaVideoWidth && (metaVideoWidth.value || "").trim() !== "") {
+      meta.video_width = intOrNullInput(metaVideoWidth);
+    }
+    if (metaVideoHeight && (metaVideoHeight.value || "").trim() !== "") {
+      meta.video_height = intOrNullInput(metaVideoHeight);
+    }
+    const r = await req("/api/project/video_meta", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: selectedProject,
+        video_path: editingVideoPath,
+        meta,
+      }),
+    });
+    await refreshProjects();
+    renderProjectDetail(r.project);
+    setMetaStatus("Saved.");
+    setTimeout(() => closeMetaModal(), 400);
+  } catch (err) {
+    setMetaStatus(err.message || "Save failed.");
+  }
+};
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (projectMetaModal && !projectMetaModal.classList.contains("hidden")) {
+    closeProjectMetaModal();
+    return;
+  }
+  if (!videoMetaModal.classList.contains("hidden")) {
+    closeMetaModal();
+    return;
+  }
+  if (quickRunModal && !quickRunModal.classList.contains("hidden")) {
+    closeQuickRunModal();
+    return;
+  }
+  if (!videoModal.classList.contains("hidden")) {
+    closeVideoModal();
+  }
+});
+
+refreshProjects().catch((err) => setStatus(err.message));

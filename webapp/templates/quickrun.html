@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Running progress</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="quickrun-page">
+  <nav class="app-nav" aria-label="Primary">
+    <a class="app-nav-link" href="/">Project Manager</a>
+    <a class="app-nav-link active" href="/quickrun">Running progress</a>
+    <a class="app-nav-link" href="/detect_explore">detect_explore</a>
+  </nav>
+  <header class="quickrun-header">
+    <h1>Running progress</h1>
+    <p class="quickrun-sub">
+      Per-video FastView jobs, logs, and output paths. Progress is stored in
+      <code>webapp/quickrun.sqlite3</code>; per-session TSV and log files remain under
+      <code>/tmp/yolofly_quickrun_sessions/&lt;session_id&gt;/</code>.
+    </p>
+  </header>
+
+  <main class="quickrun-main">
+    <section class="quickrun-history-section" aria-labelledby="qrHistoryHeading">
+      <h2 id="qrHistoryHeading">Run history</h2>
+      <p class="qr-muted qr-history-note">
+        Progress is stored in the database. <strong>Delete</strong> removes that history entry and the session’s TSV/log folder under
+        <code>/tmp/yolofly_quickrun_sessions/&lt;id&gt;/</code>. It does not delete detection CSVs, tracks, or plots produced by the pipeline.
+      </p>
+      <p id="qrHistoryStatus" class="meta-status"></p>
+      <div id="qrHistoryTable" class="qr-history-wrap"></div>
+    </section>
+
+    <div id="quickrunNoSession" class="quickrun-panel hidden">
+      <p>No session selected in the URL. Open a run from the history below, or start QuickRun from the Project Manager.</p>
+      <p class="quickrun-hint">Direct link: <code>?session=&lt;32-char hex id&gt;</code></p>
+    </div>
+
+    <div id="quickrunError" class="quickrun-panel quickrun-error hidden"></div>
+
+    <div id="qrFatal" class="qr-fatal hidden" role="alert"></div>
+
+    <div id="quickrunBody" class="hidden">
+      <div class="qr-detail-actions">
+        <button id="qrDeleteCurrentBtn" type="button" class="qr-btn-danger">Delete this run from history</button>
+      </div>
+      <section class="quickrun-summary">
+        <div><strong>Project</strong> <span id="qrProject"></span></div>
+        <div><strong>Session</strong> <code id="qrSessionId"></code></div>
+        <div><strong>Workdir</strong> <code id="qrWorkdir"></code></div>
+        <div><strong>Session status</strong> <span id="qrSessionStatus"></span></div>
+        <div><strong>Counts</strong> <span id="qrCounts"></span></div>
+      </section>
+
+      <section class="quickrun-params">
+        <h2>Pipeline parameters</h2>
+        <pre id="qrParams" class="quickrun-pre"></pre>
+      </section>
+
+      <section class="quickrun-jobs">
+        <h2>Jobs</h2>
+        <div id="qrJobs"></div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/quickrun.js"></script>
+</body>
+</html>
