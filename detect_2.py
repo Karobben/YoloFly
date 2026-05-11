@@ -64,6 +64,37 @@ def _prefetch_video_frames(dataset):
         yield item
 
 
+def _load_yolo_rows_for_tracking_init(label_path: str):
+    """Read YOLO txt rows for initializing tracking on the first tracked frame."""
+    p = Path(str(label_path)).expanduser()
+    if not p.is_file():
+        return None
+    rows = []
+    try:
+        lines = p.read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return None
+    for raw in lines:
+        t = str(raw).strip()
+        if not t:
+            continue
+        cols = t.split()
+        if len(cols) < 5:
+            continue
+        try:
+            nums = [float(x) for x in cols[:6]]
+        except ValueError:
+            continue
+        # Accept either cls+xywh (5 cols) or cls+xywh+conf (>=6 cols).
+        if len(cols) < 6:
+            nums = nums[:5] + [1.0]
+        else:
+            nums = nums[:6]
+        nums[0] = int(round(nums[0]))
+        rows.append(" ".join(str(v) for v in nums))
+    return rows if rows else None
+
+
 @torch.no_grad()
 def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
@@ -104,6 +135,10 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         quiet = False,
         snap_frame=None,  # None: full run; int (1-based): single video frame, save annotated PNG and stop
         frame_skip=1,  # process one frame every N frames (quick screening)
+        frame_start=None,  # None: start from first frame; int (1-based): inclusive start
+        frame_end=None,  # None: process to end; int (1-based): inclusive end
+        tracking_dir='csv',  # where detect CSV + tracking JSON are written
+        init_label_path=None,  # optional local YOLO txt used for first tracked frame bootstrap
         ):
     source = str(source)
     frame_skip = max(1, int(frame_skip or 1))
@@ -177,6 +212,41 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         bs = 1  # batch_size
     vid_path, vid_writer = [None] * bs, [None] * bs
 
+    # Optional frame window (single-video file only): process inclusive [frame_start, frame_end].
+    if frame_start is not None:
+        frame_start = int(frame_start)
+        if frame_start < 1:
+            raise ValueError('--frame-start must be >= 1.')
+    if frame_end is not None:
+        frame_end = int(frame_end)
+        if frame_end < 1:
+            raise ValueError('--frame-end must be >= 1.')
+    if frame_start is not None and frame_end is not None and frame_end < frame_start:
+        raise ValueError('--frame-end must be >= --frame-start.')
+    if snap_frame is not None and (frame_start is not None or frame_end is not None):
+        raise ValueError('--snapshot-frame cannot be combined with --frame-start/--frame-end.')
+
+    frame_window_active = frame_start is not None or frame_end is not None
+    window_start = 1 if frame_start is None else int(frame_start)
+    window_end = None if frame_end is None else int(frame_end)
+
+    if frame_window_active:
+        if webcam:
+            raise ValueError('--frame-start/--frame-end are only supported for file video sources, not streams/webcam.')
+        if dataset.nf != 1 or not getattr(dataset, 'video_flag', [False])[0]:
+            raise ValueError('--frame-start/--frame-end require a single video file as --source.')
+        n_frames = int(getattr(dataset, 'frames', 0) or 0)
+        if n_frames <= 0:
+            raise ValueError('Could not read frame count for video; --frame-start/--frame-end not supported.')
+        if window_start > n_frames:
+            raise ValueError(f'--frame-start {window_start} out of range 1..{n_frames} for this video.')
+        if window_end is None:
+            window_end = n_frames
+        elif window_end > n_frames:
+            raise ValueError(f'--frame-end {window_end} out of range 1..{n_frames} for this video.')
+        if dataset.cap is not None and window_start > 1:
+            dataset.cap.set(cv2.CAP_PROP_POS_FRAMES, window_start - 1)
+
     # Single-frame snapshot: one 1-based video frame index (matches Num_frame in this script)
     if snap_frame is not None:
         if webcam:
@@ -195,7 +265,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
     if pt and device.type != 'cpu':
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
     dt, seen = [0.0, 0.0, 0.0], 0
-    Num_frame = 0
+    Num_frame = (window_start - 1) if frame_window_active else 0
 
     ############
     ### Karobben
@@ -218,7 +288,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
 
     # Karobben: behaviors count
     Video = source.split("/")[-1]
-    csv_dir = Path("csv")
+    csv_dir = Path(str(tracking_dir) if tracking_dir is not None else "csv")
     csv_dir.mkdir(parents=True, exist_ok=True)
     csv_name = Video + (f"_Fskip_{frame_skip}" if frame_skip > 1 else "") + ".csv"
     csv_path = csv_dir / csv_name
@@ -233,11 +303,21 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         Trac_out = open(json_path, "a")
         json_buffer = []  # buffer and write once at end (faster)
 
+    init_label_rows = None
+    if tar_track and init_label_path:
+        init_label_rows = _load_yolo_rows_for_tracking_init(str(init_label_path))
+        if init_label_rows is None:
+            LOGGER.warning(f'Could not load --init-label-path, fallback to model output: {init_label_path}')
+        else:
+            LOGGER.info(f'Loaded {len(init_label_rows)} rows from init label: {init_label_path}')
+
     # Progress bar and prefetch for single-video processing (frame-based)
     pbar = None
     use_prefetch = not webcam and dataset.nf == 1 and getattr(dataset, 'video_flag', [False])[0]
     if use_prefetch:
         total_frames = getattr(dataset, 'frames', 0) or 0
+        if frame_window_active and window_end is not None:
+            total_frames = max(0, int(window_end) - int(window_start) + 1)
         if total_frames > 0:
             pbar = tqdm(total=total_frames, unit='frame', desc='Video', dynamic_ncols=True)
     frame_iter = _prefetch_video_frames(dataset) if use_prefetch else dataset
@@ -251,6 +331,11 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             Num_frame = snap_frame  # 1-based index for this decode (after optional cap seek)
         else:
             Num_frame += 1  ## Karobben - -
+        if frame_window_active:
+            if Num_frame < window_start:
+                continue
+            if window_end is not None and Num_frame > window_end:
+                break
         if snap_frame is None and frame_skip > 1 and (Num_frame - 1) % frame_skip != 0:
             continue
         t1 = time_sync()
@@ -400,7 +485,12 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                         Lable_Result.append(" ".join(POS_re))
 
             if tar_track and Num_frame >= tar_tr_start:
-                TB = pd.DataFrame([i.split(" ") for i in Lable_Result]).astype(float)
+                tracking_rows = Lable_Result
+                if Num_frame == tar_tr_start and init_label_rows is not None:
+                    tracking_rows = list(init_label_rows)
+                    # Keep downstream CSV/json outputs aligned with the initialized rows.
+                    Lable_Result = list(init_label_rows)
+                TB = pd.DataFrame([i.split(" ") for i in tracking_rows]).astype(float)
                 TB_head = TB[TB[0]==1]
                 TB_head.index = range(len(TB_head.index))
                 #print(TB)
@@ -736,6 +826,30 @@ def parse_opt():
         help='Single-frame mode (single video --source only): run detection on frame N only (1-based index; '
              'omit N to use the first frame). Saves annotated PNG as <video>_frame<N>_snapshot.png and YOLO-format '
              'labels/<video>_frame<N>_snapshot.txt under the run folder (class + norm xywh; add conf with --save-conf). Exits.',
+    )
+    parser.add_argument(
+        '--frame-start',
+        type=int,
+        default=None,
+        help='Frame window start (1-based, inclusive). Default None = first frame.',
+    )
+    parser.add_argument(
+        '--frame-end',
+        type=int,
+        default=None,
+        help='Frame window end (1-based, inclusive). Default None = last frame.',
+    )
+    parser.add_argument(
+        '--tracking-dir',
+        type=str,
+        default='csv',
+        help='Directory for tracking CSV/JSON outputs (default: csv).',
+    )
+    parser.add_argument(
+        '--init-label-path',
+        type=str,
+        default=None,
+        help='Optional local YOLO label file used to initialize the first tracked frame.',
     )
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand

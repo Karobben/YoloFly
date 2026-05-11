@@ -223,6 +223,7 @@ const projectCurrently = document.getElementById("projectCurrently");
 const projectAbstract = document.getElementById("projectAbstract");
 const projectQuickrunOutput = document.getElementById("projectQuickrunOutput");
 const projectSnapshotOutput = document.getElementById("projectSnapshotOutput");
+const projectTrackingOutput = document.getElementById("projectTrackingOutput");
 const closeProjectMetaModalBtn = document.getElementById("closeProjectMetaModalBtn");
 const projectMetaSaveBtn = document.getElementById("projectMetaSaveBtn");
 const projectMetaModalStatus = document.getElementById("projectMetaModalStatus");
@@ -231,6 +232,7 @@ const videoSelectAll = document.getElementById("videoSelectAll");
 const batchDeleteVideosBtn = document.getElementById("batchDeleteVideosBtn");
 const quickRunFastviewBtn = document.getElementById("quickRunFastviewBtn");
 const snapshotBatchBtn = document.getElementById("snapshotBatchBtn");
+const trackingBatchBtn = document.getElementById("trackingBatchBtn");
 const quickRunModal = document.getElementById("quickRunModal");
 const quickRunScopeText = document.getElementById("quickRunScopeText");
 const closeQuickRunModalBtn = document.getElementById("closeQuickRunModalBtn");
@@ -257,6 +259,8 @@ const importVideoMetaTsvBtn = document.getElementById("importVideoMetaTsvBtn");
 const exportVideoMetaTsvBtn = document.getElementById("exportVideoMetaTsvBtn");
 
 let projects = [];
+/** Set while dragging a project row by handle (HTML5 DnD). */
+let dragProjectName = null;
 let selectedProject = "";
 let editingVideoPath = "";
 /** When non-null, QuickRun uses only these paths; null means all project videos. */
@@ -339,6 +343,9 @@ function openProjectMetaModal(project) {
   projectQuickrunOutput.value = project.quickrun_output || "";
   if (projectSnapshotOutput) {
     projectSnapshotOutput.value = project.snapshot_output || "";
+  }
+  if (projectTrackingOutput) {
+    projectTrackingOutput.value = project.tracking_output || "traking";
   }
   setProjectMetaStatus("");
   projectMetaModal.classList.remove("hidden");
@@ -561,11 +568,37 @@ function fillVideoActionsTd(tdAct, path, videoEntry, playbackOverride, resultsOp
         ? String(resultsOpts.clipId).trim()
         : "";
     if (cid) q.set("clip_id", cid);
-    window.location.href = `/video-results?${q.toString()}`;
+    window.open(`/video-results?${q.toString()}`, "_blank", "noopener");
+  };
+  const trendingBtn = document.createElement("button");
+  trendingBtn.className = "video-results-btn";
+  trendingBtn.type = "button";
+  trendingBtn.textContent = "Trending";
+  trendingBtn.title = "Open total speed interactive plot";
+  trendingBtn.onclick = () => {
+    if (!selectedProject) {
+      setStatus("Select a project first.");
+      return;
+    }
+    const q = new URLSearchParams({ name: selectedProject, video_path: path });
+    const cid =
+      resultsOpts && resultsOpts.clipId != null && String(resultsOpts.clipId).trim() !== ""
+        ? String(resultsOpts.clipId).trim()
+        : "";
+    if (cid) q.set("clip_id", cid);
+    req(`/api/project/total_speed_plot_url?${q.toString()}`)
+      .then((r) => {
+        const u = new URLSearchParams({ path: r.path, video_path: r.video_path || path });
+        u.set("project", selectedProject);
+        if (r.clip_id != null && r.clip_id !== "") u.set("clip_id", String(r.clip_id));
+        window.open(`/total-speed-plot?${u.toString()}`, "_blank", "noopener");
+      })
+      .catch((err) => setStatus(err.message || "No total speed plot for this row."));
   };
   tdAct.appendChild(playBtn);
   tdAct.appendChild(editBtn);
   tdAct.appendChild(resultsBtn);
+  tdAct.appendChild(trendingBtn);
 }
 
 function buildVideoSubclipRow(parentPath, videoEntry, clip) {
@@ -613,6 +646,18 @@ function buildVideoSubclipRow(parentPath, videoEntry, clip) {
     a.textContent = "Plot";
     a.className = "video-subclip-plot-link";
     metaDiv.appendChild(a);
+  }
+  if (clip.has_tracking && clip.tracking_output_dir) {
+    metaDiv.appendChild(document.createTextNode(" · "));
+    const t = document.createElement("a");
+    const q2 = new URLSearchParams({
+      tracking_dir: String(clip.tracking_output_dir),
+      video_path: String(parentPath),
+    });
+    t.href = `/detect_explore?${q2.toString()}`;
+    t.textContent = "Tracking";
+    t.className = "video-subclip-plot-link";
+    metaDiv.appendChild(t);
   }
   tdName.appendChild(metaDiv);
 
@@ -1086,8 +1131,28 @@ async function detectVideoStreamMeta() {
   }
 }
 
+function clearProjectDragUi() {
+  dragProjectName = null;
+  if (!projectList) return;
+  for (const el of projectList.querySelectorAll(".project-row.drag-over, .project-row.dragging")) {
+    el.classList.remove("drag-over", "dragging");
+  }
+}
+
+function reorderProjectsLocal(fromName, toName) {
+  const names = projects.map((x) => x.name);
+  const fromI = names.indexOf(fromName);
+  const toI = names.indexOf(toName);
+  if (fromI < 0 || toI < 0 || fromI === toI) return null;
+  const next = [...projects];
+  const [item] = next.splice(fromI, 1);
+  next.splice(toI, 0, item);
+  return next;
+}
+
 function renderProjectList() {
   projectList.innerHTML = "";
+  clearProjectDragUi();
   if (!projects.length) {
     projectList.textContent = "No projects yet.";
     return;
@@ -1095,6 +1160,84 @@ function renderProjectList() {
   for (const p of projects) {
     const row = document.createElement("div");
     row.className = "project-row" + (p.name === selectedProject ? " selected" : "");
+    row.dataset.projectName = p.name;
+
+    const dragHandle = document.createElement("span");
+    dragHandle.className = "project-drag-handle";
+    dragHandle.textContent = "⋮⋮";
+    dragHandle.title = "Drag to reorder (top = first in list)";
+    dragHandle.draggable = true;
+    dragHandle.addEventListener("dragstart", (e) => {
+      dragProjectName = p.name;
+      row.classList.add("dragging");
+      try {
+        e.dataTransfer.setData("text/plain", p.name);
+        e.dataTransfer.effectAllowed = "move";
+      } catch (_err) {
+        /* ignore */
+      }
+    });
+    dragHandle.addEventListener("dragend", () => {
+      clearProjectDragUi();
+    });
+
+    row.addEventListener("dragover", (e) => {
+      if (!dragProjectName || dragProjectName === p.name) return;
+      e.preventDefault();
+      try {
+        e.dataTransfer.dropEffect = "move";
+      } catch (_err) {
+        /* ignore */
+      }
+      for (const el of projectList.querySelectorAll(".project-row.drag-over")) {
+        el.classList.remove("drag-over");
+      }
+      row.classList.add("drag-over");
+    });
+
+    row.addEventListener("dragleave", (e) => {
+      if (row.contains(e.relatedTarget)) return;
+      row.classList.remove("drag-over");
+    });
+
+    row.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      const from =
+        dragProjectName ||
+        (() => {
+          try {
+            return (e.dataTransfer.getData("text/plain") || "").trim();
+          } catch (_err) {
+            return "";
+          }
+        })();
+      row.classList.remove("drag-over");
+      if (!from || from === p.name) {
+        clearProjectDragUi();
+        return;
+      }
+      const next = reorderProjectsLocal(from, p.name);
+      if (!next) {
+        clearProjectDragUi();
+        return;
+      }
+      const order = next.map((x) => x.name);
+      try {
+        const r = await req("/api/projects/reorder", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ order }),
+        });
+        projects = r.projects || next;
+        setStatus("Project order saved.");
+      } catch (err) {
+        setStatus(err.message || "Could not save project order.");
+        await refreshProjects();
+      } finally {
+        clearProjectDragUi();
+        renderProjectList();
+      }
+    });
 
     const nameBtn = document.createElement("button");
     nameBtn.className = "project-name-btn";
@@ -1140,6 +1283,7 @@ function renderProjectList() {
       }
     };
 
+    row.appendChild(dragHandle);
     row.appendChild(nameBtn);
     row.appendChild(metaBtn);
     row.appendChild(delBtn);
@@ -1374,6 +1518,17 @@ async function loadProjectDetail(name) {
 async function refreshProjects() {
   const r = await req("/api/projects");
   projects = r.projects || [];
+  if (!projects.length) {
+    selectedProject = "";
+    renderProjectList();
+    renderProjectDetail(null);
+    return;
+  }
+  const names = new Set(projects.map((p) => p.name));
+  if (!selectedProject || !names.has(selectedProject)) {
+    await loadProjectDetail(projects[0].name);
+    return;
+  }
   renderProjectList();
 }
 
@@ -1570,6 +1725,58 @@ if (snapshotBatchBtn) {
   };
 }
 
+if (trackingBatchBtn) {
+  trackingBatchBtn.onclick = async () => {
+    if (!selectedProject) {
+      setStatus("Select a project first.");
+      return;
+    }
+    const items = collectSnapshotBatchItems();
+    if (items === null) return;
+    if (!items.length) {
+      setStatus("Select at least one video and/or subclip for tracking batch.");
+      return;
+    }
+
+    const runTrackingBatch = async (allowMissingInit) => {
+      const resp = await fetch("/api/project/tracking_batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: selectedProject,
+          items,
+          use_snapshot_init: true,
+          allow_missing_init: !!allowMissingInit,
+        }),
+      });
+      const data = await resp.json();
+      return { resp, data };
+    };
+
+    setStatus("Starting tracking batch (using snapshot labels when available)…");
+    try {
+      let { resp, data } = await runTrackingBatch(false);
+      if (resp.status === 409 && data && data.missing_count) {
+        const ok = window.confirm(
+          `${data.missing_count} selected target(s) are missing snapshot labels for tracking start.\n\nContinue and fallback to model output for those targets?`,
+        );
+        if (!ok) {
+          setStatus("Tracking batch canceled.");
+          return;
+        }
+        ({ resp, data } = await runTrackingBatch(true));
+      }
+      if (!resp.ok || data.error) {
+        throw new Error(data.error || `Request failed: ${resp.status}`);
+      }
+      const dest = data.quickrun_url || `/quickrun?session=${encodeURIComponent(data.session_id)}`;
+      window.location.href = dest;
+    } catch (err) {
+      setStatus(err.message || "Tracking batch failed.");
+    }
+  };
+}
+
 if (quickRunStartBtn) {
   quickRunStartBtn.onclick = async () => {
     if (!selectedProject) return;
@@ -1728,6 +1935,7 @@ if (projectMetaSaveBtn) {
           abstract: (projectAbstract && projectAbstract.value) || "",
           quickrun_output: (projectQuickrunOutput && projectQuickrunOutput.value) || "",
           snapshot_output: (projectSnapshotOutput && projectSnapshotOutput.value) || "",
+          tracking_output: (projectTrackingOutput && projectTrackingOutput.value) || "traking",
         }),
       });
       await refreshProjects();

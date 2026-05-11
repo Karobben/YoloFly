@@ -61,7 +61,7 @@
 
     <section class="home-panel">
       <div class="field">
-        <label>Projects</label>
+        <label>Projects <span class="home-muted">(drag ⋮⋮ to reorder — top shows first)</span></label>
         <div id="projectList" class="project-list"></div>
       </div>
       <div id="projectDetail" class="project-detail">
@@ -85,6 +85,7 @@
             <button type="button" id="batchDeleteVideosBtn">Delete selected</button>
             <button type="button" id="quickRunFastviewBtn">QuickRun</button>
             <button type="button" id="snapshotBatchBtn" title="detect_2.py single-frame snapshot at each video’s frame start">Snapshot (1 frame)</button>
+            <button type="button" id="trackingBatchBtn" title="detect_2.py tracking; can initialize first tracked frame from snapshot labels">Tracking</button>
           </div>
           <p id="videoListEmpty" class="video-list-empty">No videos.</p>
           <div id="videoTableWrap" class="video-table-wrap hidden">
@@ -199,6 +200,9 @@
         </label>
         <label class="meta-span-2">Snapshot batch base (<code>detect_2.py --project</code>; default folder <code>snapshot</code> under the same parent as YoloFly)
           <input id="projectSnapshotOutput" type="text" placeholder="e.g. snapshot or MyRuns/snapshots — results in …/name under this folder" />
+        </label>
+        <label class="meta-span-2">Tracking batch base (default folder <code>traking</code> under the same parent as YoloFly)
+          <input id="projectTrackingOutput" type="text" placeholder="e.g. traking or MyRuns/tracking — results in …/name under this folder" />
         </label>
       </div>
       <div class="meta-actions-row">

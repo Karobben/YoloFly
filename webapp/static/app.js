@@ -34,6 +34,7 @@ const loadCsvBtn = document.getElementById("loadCsv");
 const csvPreviewEl = document.getElementById("csvPreview");
 const csvFullStatsEl = document.getElementById("csvFullStats");
 const csvStatusEl = document.getElementById("csvStatus");
+const videoViewInfoText = document.getElementById("videoViewInfoText");
 const jsonSelect = document.getElementById("jsonSelect");
 const refreshJsonBtn = document.getElementById("refreshJson");
 const loadJsonBtn = document.getElementById("loadJson");
@@ -50,6 +51,9 @@ const nextFrameBtn = document.getElementById("nextFrameBtn");
 const frameSlider = document.getElementById("frameSlider");
 const playPauseBtn = document.getElementById("playPauseBtn");
 const videoInfoText = document.getElementById("videoInfoText");
+const trackingPathText = document.getElementById("trackingPathText");
+const videoViewLoadModal = document.getElementById("videoViewLoadModal");
+const videoViewLoadStatus = document.getElementById("videoViewLoadStatus");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const videoPlayer = document.getElementById("videoPlayer");
@@ -76,9 +80,13 @@ let trackingCurrent = {};
 let trackingHistory = [];
 let trackingFrameMin = 1;
 let trackingFrameMax = 1;
+let frameViewMin = 1;
+let frameViewMax = 1;
 const pageQs = new URLSearchParams(window.location.search);
 const initialRunParam = pageQs.get("run");
 const initialSnapshotDir = (pageQs.get("snapshot_dir") || "").trim();
+const initialTrackingDir = (pageQs.get("tracking_dir") || "").trim();
+const initialTrackingVideoPath = (pageQs.get("video_path") || "").trim();
 
 /** True when opened via ?snapshot_dir=… (label load/save use absolute paths). */
 let exploreSnapshotActive = false;
@@ -89,6 +97,22 @@ const CLASS_COLORS = [
 
 function setStatus(msg) { statusEl.textContent = msg || ""; }
 function setCsvStatus(msg) { csvStatusEl.textContent = msg || ""; }
+
+function showVideoViewLoad(msg) {
+  if (!videoViewLoadModal || !videoViewLoadStatus) return;
+  videoViewLoadStatus.textContent = msg || "Loading…";
+  videoViewLoadModal.classList.remove("hidden");
+}
+
+function updateVideoViewLoad(msg) {
+  if (!videoViewLoadStatus) return;
+  videoViewLoadStatus.textContent = msg || "Loading…";
+}
+
+function hideVideoViewLoad() {
+  if (!videoViewLoadModal) return;
+  videoViewLoadModal.classList.add("hidden");
+}
 
 function q(url) { return fetch(url).then((r) => r.json()); }
 
@@ -323,6 +347,26 @@ function trackingCenter(fly, key) {
   return { x: Number(v[0]) * canvas.width, y: Number(v[1]) * canvas.height };
 }
 
+function nearestHeadCenterFromCsv(body) {
+  if (!body || !Array.isArray(boxes) || !boxes.length) return null;
+  let best = null;
+  let bestD2 = Infinity;
+  for (const b of boxes) {
+    if (!b || Number(b.cls) !== 1) continue;
+    const hx = Number(b.xc) * canvas.width;
+    const hy = Number(b.yc) * canvas.height;
+    if (!Number.isFinite(hx) || !Number.isFinite(hy)) continue;
+    const dx = hx - body.x;
+    const dy = hy - body.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      best = { x: hx, y: hy };
+    }
+  }
+  return best;
+}
+
 function drawArrow(x1, y1, x2, y2, color, alpha = 1) {
   const oldAlpha = ctx.globalAlpha;
   ctx.globalAlpha = alpha;
@@ -345,8 +389,11 @@ function drawArrow(x1, y1, x2, y2, color, alpha = 1) {
 }
 
 function drawTrackingOverlay() {
-  if (!showTracking || !showTracking.checked) return;
-  if (showTrackHistory && showTrackHistory.checked && trackingHistory.length) {
+  const wantArrows = !!(showTracking && showTracking.checked);
+  const wantIds = !!(showTrackIds && showTrackIds.checked);
+  if (!wantArrows && !wantIds) return;
+
+  if (wantArrows && showTrackHistory && showTrackHistory.checked && trackingHistory.length) {
     const nFrames = trackingHistory.length;
     for (let i = 0; i < nFrames; i++) {
       const fr = trackingHistory[i];
@@ -368,15 +415,19 @@ function drawTrackingOverlay() {
 
   for (const [id, fly] of Object.entries(trackingCurrent || {})) {
     const body = trackingCenter(fly, "body");
-    const head = trackingCenter(fly, "head");
-    if (!body || !head) continue;
+    const head = trackingCenter(fly, "head") || nearestHeadCenterFromCsv(body);
+    if (!body) continue;
     const color = colorForFly(id);
-    drawArrow(body.x, body.y, head.x, head.y, color, 0.95);
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(body.x, body.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-    if (showTrackIds && showTrackIds.checked) {
+    if (wantArrows && head) {
+      drawArrow(body.x, body.y, head.x, head.y, color, 0.95);
+    }
+    if (wantArrows || wantIds) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(body.x, body.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (wantIds) {
       const label = String(id).replace(/^fly_/, "");
       ctx.font = "14px sans-serif";
       const tw = ctx.measureText(label).width;
@@ -542,6 +593,24 @@ function currentFrameInputValue() {
   return Math.max(1, parseInt(videoPathFrameInput.value || frameSlider.value || "1", 10));
 }
 
+function clampFrameToView(frameNo) {
+  const lo = Math.max(1, frameViewMin || 1);
+  const hiBase = Math.max(1, loadedVideoFrameCount || 1);
+  const hi = Math.max(lo, Math.min(hiBase, frameViewMax || hiBase));
+  return Math.max(lo, Math.min(frameNo, hi));
+}
+
+function applyFrameViewLimits() {
+  frameViewMin = Math.max(1, frameViewMin || 1);
+  const hiBase = Math.max(1, loadedVideoFrameCount || 1);
+  frameViewMax = Math.max(frameViewMin, Math.min(frameViewMax || hiBase, hiBase));
+  frameSlider.min = String(frameViewMin);
+  frameSlider.max = String(frameViewMax);
+  const cur = clampFrameToView(currentFrameInputValue());
+  videoPathFrameInput.value = String(cur);
+  frameSlider.value = String(cur);
+}
+
 async function loadVideoInfo(path) {
   const r = await q(`/api/video_info_by_path?video_path=${encodeURIComponent(path)}`);
   if (r.error) {
@@ -550,9 +619,11 @@ async function loadVideoInfo(path) {
   }
   loadedVideoFrameCount = Math.max(1, r.frame_count || 1);
   loadedVideoFps = (r.fps && r.fps > 0) ? r.fps : 10;
-  frameSlider.min = "1";
-  frameSlider.max = String(loadedVideoFrameCount);
-  frameSlider.value = String(Math.min(Math.max(1, parseInt(videoPathFrameInput.value || "1", 10)), loadedVideoFrameCount));
+  if (!currentJsonPath) {
+    frameViewMin = 1;
+    frameViewMax = loadedVideoFrameCount;
+  }
+  applyFrameViewLimits();
   videoInfoText.textContent = `Frames: ${loadedVideoFrameCount}, FPS: ${(r.fps || 0).toFixed(2)}`;
   return true;
 }
@@ -594,6 +665,9 @@ async function applyTrackingForFrame(frameNo) {
       ? `${currentJsonPath}: frame ${frameNo}, ${n} tracked flies (${range})`
       : `${currentJsonPath}: no tracking for frame ${frameNo} (${range})`;
   }
+  if (trackingPathText && currentJsonPath) {
+    trackingPathText.textContent = currentJsonPath;
+  }
   draw();
 }
 
@@ -603,7 +677,7 @@ async function openCsvVideoFrame(frameNo) {
     setCsvStatus("Set video path first.");
     return;
   }
-  const f = Math.max(1, Math.min(frameNo, loadedVideoFrameCount || frameNo));
+  const f = clampFrameToView(frameNo);
   videoPathFrameInput.value = String(f);
   frameSlider.value = String(f);
   await loadVideoURL(vp);
@@ -623,8 +697,9 @@ function stopPlayback() {
 function startPlayback() {
   stopPlayback();
   videoPlayer.play();
+  const maxPlayFrame = clampFrameToView(loadedVideoFrameCount || 1);
   const tick = async () => {
-    const frame = Math.max(1, Math.min(loadedVideoFrameCount, Math.floor(videoPlayer.currentTime * (loadedVideoFps || 10)) + 1));
+    const frame = clampFrameToView(Math.floor(videoPlayer.currentTime * (loadedVideoFps || 10)) + 1);
     if (frame !== parseInt(videoPathFrameInput.value || "1", 10)) {
       videoPathFrameInput.value = String(frame);
       frameSlider.value = String(frame);
@@ -632,7 +707,7 @@ function startPlayback() {
       await applyTrackingForFrame(frame);
       setCsvStatus(`Frame ${frame}: ${boxes.length} boxes, ${Object.keys(trackingCurrent || {}).length} tracked flies`);
     }
-    if (videoPlayer.paused || frame >= loadedVideoFrameCount) {
+    if (videoPlayer.paused || frame >= maxPlayFrame) {
       stopPlayback();
       return;
     }
@@ -782,21 +857,20 @@ applyRawBtn.onclick = () => {
   draw();
 };
 
-loadCsvBtn.onclick = async () => {
-  const p = csvSelect.value;
-  if (!p) return;
+async function loadCsvByPath(p) {
+  if (!p) return false;
   // Keep table preview lightweight, but index detections from full csv.
   const preview = await q(`/api/csv_preview?path=${encodeURIComponent(p)}&limit=300`);
   if (preview.error) {
     setCsvStatus(preview.error);
-    return;
+    return false;
   }
   renderCsvPreview(preview.rows || []);
 
   const idx = await q(`/api/csv_index?path=${encodeURIComponent(p)}`);
   if (idx.error) {
     setCsvStatus(idx.error);
-    return;
+    return false;
   }
   currentCsvPath = p;
   csvFrameMin = idx.frame_min || 1;
@@ -808,20 +882,30 @@ loadCsvBtn.onclick = async () => {
   setCsvStatus(
     `Indexed CSV: ${idx.path} (${idx.count} detections, frames ${csvFrameMin}-${csvFrameMax}, preview 300 rows)`
   );
+  return true;
+}
+
+loadCsvBtn.onclick = async () => {
+  const p = csvSelect.value;
+  if (!p) return;
+  await loadCsvByPath(p);
 };
 
-loadJsonBtn.onclick = async () => {
-  const p = jsonSelect.value;
-  if (!p) return;
+async function loadJsonByPath(p) {
+  if (!p) return false;
   const idx = await q(`/api/tracking_index?path=${encodeURIComponent(p)}`);
   if (idx.error) {
     setCsvStatus(idx.error);
-    return;
+    return false;
   }
   currentJsonPath = p;
   trackingFrameMin = idx.frame_min || 1;
   trackingFrameMax = idx.frame_max || 1;
+  frameViewMin = trackingFrameMin;
+  frameViewMax = trackingFrameMax;
+  applyFrameViewLimits();
   trackingInfoText.textContent = `${idx.path}: ${idx.count} frames (${trackingFrameMin}-${trackingFrameMax})`;
+  if (trackingPathText) trackingPathText.textContent = idx.path;
   const currentFrame = currentFrameInputValue();
   const targetFrame = (currentFrame < trackingFrameMin || currentFrame > trackingFrameMax)
     ? trackingFrameMin
@@ -837,6 +921,13 @@ loadJsonBtn.onclick = async () => {
   }
   const jumped = targetFrame !== currentFrame ? `; jumped to first tracked frame ${targetFrame}` : "";
   setCsvStatus(`Loaded tracking JSON: ${idx.path}${jumped}`);
+  return true;
+}
+
+loadJsonBtn.onclick = async () => {
+  const p = jsonSelect.value;
+  if (!p) return;
+  await loadJsonByPath(p);
 };
 
 refreshJsonBtn.onclick = refreshJsonFiles;
@@ -862,11 +953,11 @@ frameSlider.oninput = () => {
   openCsvVideoFrame(f);
 };
 prevFrameBtn.onclick = () => {
-  const f = Math.max(1, parseInt(videoPathFrameInput.value || "1", 10) - 1);
+  const f = clampFrameToView(parseInt(videoPathFrameInput.value || "1", 10) - 1);
   openCsvVideoFrame(f);
 };
 nextFrameBtn.onclick = () => {
-  const f = Math.min(loadedVideoFrameCount, parseInt(videoPathFrameInput.value || "1", 10) + 1);
+  const f = clampFrameToView(parseInt(videoPathFrameInput.value || "1", 10) + 1);
   openCsvVideoFrame(f);
 };
 playPauseBtn.onclick = () => {
@@ -1025,6 +1116,56 @@ async function loadSnapshotExplore(dir) {
   }
 }
 
+async function loadTrackingExplore(dir, videoPathHint = "") {
+  showVideoViewLoad("Resolving tracking result folder…");
+  try {
+    const qsp = new URLSearchParams({ dir });
+    if (videoPathHint) qsp.set("video_path", videoPathHint);
+    const resp = await fetch(`/api/tracking_explore/manifest?${qsp.toString()}`);
+    const r = await resp.json();
+    if (!resp.ok || r.error) {
+      setCsvStatus(r.error || `Could not open tracking folder (${resp.status}).`);
+      return;
+    }
+    if (!r.video_path || !r.csv_abs_path || !r.json_abs_path) {
+      setCsvStatus("Tracking folder is missing required video/csv/json assets.");
+      return;
+    }
+
+    setTab("csv");
+    if (videoViewInfoText) {
+      videoViewInfoText.textContent = `Source: ${r.save_dir}`;
+    }
+    videoPathInput.value = r.video_path;
+    if (trackingPathText) trackingPathText.textContent = r.json_abs_path;
+
+    updateVideoViewLoad("Loading video metadata…");
+    const okVideo = await loadVideoInfo(r.video_path);
+    if (!okVideo) return;
+
+    updateVideoViewLoad("Loading raw video and first frame…");
+    await loadVideoURL(r.video_path);
+    const firstFrame = Math.max(1, Number(r.frame_min || 1));
+    videoPathFrameInput.value = String(firstFrame);
+    frameSlider.value = String(firstFrame);
+
+    updateVideoViewLoad("Loading detection CSV…");
+    const okCsv = await loadCsvByPath(r.csv_abs_path);
+    if (!okCsv) return;
+
+    updateVideoViewLoad("Loading tracking JSON…");
+    const okJson = await loadJsonByPath(r.json_abs_path);
+    if (!okJson) return;
+
+    await openCsvVideoFrame(firstFrame);
+    setCsvStatus(`Video View ready: ${r.video_path}`);
+  } catch (e) {
+    setCsvStatus(e.message || "Failed to load Video View.");
+  } finally {
+    hideVideoViewLoad();
+  }
+}
+
 async function boot() {
   await refreshRuns();
   refreshCsvFiles();
@@ -1034,6 +1175,8 @@ async function boot() {
   setTab("runs");
   if (initialSnapshotDir) {
     await loadSnapshotExplore(initialSnapshotDir);
+  } else if (initialTrackingDir) {
+    await loadTrackingExplore(initialTrackingDir, initialTrackingVideoPath);
   }
 }
 boot();

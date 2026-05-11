@@ -14,10 +14,10 @@
   </nav>
   <header>
     <h1>detect_explore</h1>
-    <p>Single workspace: browse <code>runs/detect</code>, preview images/video frames, load/edit/save YOLO labels. Snapshot batches can open here via <code>?snapshot_dir=&lt;abs path to snapshot folder&gt;</code> (loads <code>*_snapshot_raw.png</code> + matching <code>labels/*.txt</code>).</p>
+    <p>Single workspace: browse <code>runs/detect</code>, preview images/video frames, load/edit/save YOLO labels. Snapshot batches can open via <code>?snapshot_dir=&lt;abs path&gt;</code>; tracking results open Video View via <code>?tracking_dir=&lt;abs path&gt;&amp;video_path=&lt;abs video&gt;</code>.</p>
     <div class="tabs">
       <button id="tabRuns" class="tab-btn active">Runs Label Editor</button>
-      <button id="tabCsv" class="tab-btn">CSV Explore</button>
+      <button id="tabCsv" class="tab-btn">Video View</button>
     </div>
   </header>
 
@@ -82,20 +82,16 @@
     </aside>
     <aside id="paneCsv" class="hidden">
       <div class="field">
-        <label>CSV file from csv/</label>
-        <select id="csvSelect"></select>
-        <div class="row">
-          <button id="refreshCsv">Refresh CSV list</button>
-          <button id="loadCsv">Load CSV</button>
-        </div>
+        <label>Tracking result source</label>
+        <small id="videoViewInfoText">Open from Results → Tracking output to auto-load video, CSV, and JSON.</small>
       </div>
 
       <div class="field">
-        <label>Video path (absolute or project-relative)</label>
-        <input id="videoPathInput" type="text" placeholder="/home/.../video.mp4 or runs/detect/exp/video.mp4" />
+        <label>Video path</label>
+        <input id="videoPathInput" type="text" readonly />
         <div class="row">
           <input id="videoPathFrameInput" type="number" min="1" value="1" />
-          <button id="openVideoPathFrame">Open frame</button>
+          <button id="openVideoPathFrame">Jump frame</button>
         </div>
         <div class="row3">
           <button id="prevFrameBtn">Prev</button>
@@ -115,12 +111,8 @@
         <div id="csvFullStats" class="class-stats"></div>
       </div>
       <div class="field">
-        <label>Tracking JSON from csv/</label>
-        <select id="jsonSelect"></select>
-        <div class="row">
-          <button id="refreshJson">Refresh JSON list</button>
-          <button id="loadJson">Load JSON</button>
-        </div>
+        <label>Tracking JSON</label>
+        <small id="trackingPathText">No tracking JSON loaded.</small>
         <label class="check-row">
           <input id="showTracking" type="checkbox" checked />
           Show body-head arrows
@@ -156,6 +148,12 @@
         <small>Turn on Add mode, then drag on image to create a box for current frame.</small>
       </div>
       <p id="csvStatus"></p>
+      <select id="csvSelect" class="hidden"></select>
+      <button id="refreshCsv" class="hidden">Refresh CSV list</button>
+      <button id="loadCsv" class="hidden">Load CSV</button>
+      <select id="jsonSelect" class="hidden"></select>
+      <button id="refreshJson" class="hidden">Refresh JSON list</button>
+      <button id="loadJson" class="hidden">Load JSON</button>
     </aside>
 
     <section>
@@ -175,6 +173,12 @@
       </div>
     </section>
   </main>
+  <div id="videoViewLoadModal" class="video-view-load-modal hidden" role="dialog" aria-modal="true" aria-label="Loading video view">
+    <div class="video-view-load-card">
+      <strong>Loading Video View…</strong>
+      <p id="videoViewLoadStatus">Preparing…</p>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

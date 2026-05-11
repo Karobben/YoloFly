@@ -213,10 +213,23 @@ function detectExploreSnapshotUrl(absDir) {
   return `/detect_explore?${u.toString()}`;
 }
 
+function detectExploreTrackingUrl(absDir) {
+  const u = new URLSearchParams({ tracking_dir: absDir });
+  if (videoPath) u.set("video_path", videoPath);
+  return `/detect_explore?${u.toString()}`;
+}
+
 function isSnapshotOutputDirectory(a) {
   return (
     a.kind === "output_directory" &&
     String(a.label || "").toLowerCase().includes("snapshot")
+  );
+}
+
+function isTrackingOutputDirectory(a) {
+  return (
+    a.kind === "output_directory" &&
+    String(a.label || "").toLowerCase().includes("tracking")
   );
 }
 
@@ -245,6 +258,9 @@ function renderArtifactBlock(a) {
     if (isSnapshotOutputDirectory(a) && a.path) {
       const href = detectExploreSnapshotUrl(a.path);
       body += `<div class="vr-detect-explore-actions"><a class="vr-btn-detect-explore" href="${esc(href)}" target="_blank" rel="noopener">Open raw frame + labels in detect_explore</a></div>`;
+    } else if (isTrackingOutputDirectory(a) && a.path) {
+      const href = detectExploreTrackingUrl(a.path);
+      body += `<div class="vr-detect-explore-actions"><a class="vr-btn-detect-explore" href="${esc(href)}" target="_blank" rel="noopener">Open Video View in detect_explore</a></div>`;
     }
   } else {
     body = renderFileRow(a.label || a.kind, a.path, { exists: a.exists });

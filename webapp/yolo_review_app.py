@@ -67,6 +67,19 @@ def _safe_path_any(path_str: str) -> Path:
     return p
 
 
+def _safe_csv_or_any(path_str: str) -> Path:
+    """
+    CSV/JSON helper: allow legacy relative paths under CSV_ROOT, or absolute paths under ALLOWED_PATH_ROOTS.
+    """
+    raw = str(path_str or "").strip()
+    if not raw:
+        raise ValueError("path is required")
+    p0 = Path(raw)
+    if p0.is_absolute():
+        return _safe_path_any(raw)
+    return _safe_join(CSV_ROOT, raw)
+
+
 def _list_files(base: Path, exts: set[str]) -> List[str]:
     if not base.exists():
         return []
@@ -430,6 +443,7 @@ def _normalize_project_item(item: dict) -> dict | None:
     abstract = str(item.get("abstract", "") or "").strip()
     quickrun_output = str(item.get("quickrun_output", "") or "").strip()
     snapshot_output = str(item.get("snapshot_output", "") or "").strip()
+    tracking_output = str(item.get("tracking_output", "") or "").strip()
     return {
         "name": name,
         "lab_info": lab_info,
@@ -437,6 +451,7 @@ def _normalize_project_item(item: dict) -> dict | None:
         "abstract": abstract,
         "quickrun_output": quickrun_output,
         "snapshot_output": snapshot_output,
+        "tracking_output": tracking_output,
         "videos": clean_videos,
     }
 
@@ -490,6 +505,7 @@ def _project_detail_payload(project: dict) -> dict:
         "abstract": project.get("abstract") or "",
         "quickrun_output": project.get("quickrun_output") or "",
         "snapshot_output": project.get("snapshot_output") or "",
+        "tracking_output": project.get("tracking_output") or "",
         "videos": project["videos"],
         "video_count": len(project["videos"]),
     }
@@ -581,6 +597,7 @@ def api_create_project():
         "abstract": "",
         "quickrun_output": "",
         "snapshot_output": "",
+        "tracking_output": "traking",
         "videos": [],
     })
     _write_projects_db(projects)
@@ -599,6 +616,31 @@ def api_delete_project():
         return jsonify({"error": "project not found"}), 404
     _write_projects_db(kept)
     return jsonify({"ok": True, "deleted": name})
+
+
+@app.put("/api/projects/reorder")
+def api_projects_reorder():
+    """Persist project list order (JSON array order in projects.json). First row = top priority."""
+    data = request.get_json(force=True)
+    order = data.get("order")
+    if not isinstance(order, list) or not order:
+        return jsonify({"error": "order must be a non-empty list of project names"}), 400
+    order_names: List[str] = []
+    for raw in order:
+        n = str(raw or "").strip()
+        if not _is_valid_project_name(n):
+            return jsonify({"error": "invalid project name in order"}), 400
+        order_names.append(n)
+    projects = _read_projects_db()
+    current_names = [p["name"] for p in projects]
+    if len(order_names) != len(current_names):
+        return jsonify({"error": "order length must match number of projects"}), 400
+    if set(order_names) != set(current_names):
+        return jsonify({"error": "order must list each project exactly once"}), 400
+    by_name = {p["name"]: p for p in projects}
+    reordered = [by_name[n] for n in order_names]
+    _write_projects_db(reordered)
+    return jsonify({"ok": True, "projects": [_project_summary(p) for p in reordered]})
 
 
 @app.get("/api/project")
@@ -635,6 +677,57 @@ def api_project_video_subclips():
     _quickrun_sync_artifacts_from_jobs_for_video(canon_vp)
     clips = _video_subclips_for_video(canon_vp, project_name=name)
     return jsonify({"ok": True, "video_path": canon_vp, "clips": clips})
+
+
+@app.get("/api/project/total_speed_plot_url")
+def api_project_total_speed_plot_url():
+    """Resolve CSV path + query params for /total-speed-plot (first matching artifact or subclip CSV)."""
+    name = str(request.args.get("name", "")).strip()
+    raw_vp = str(request.args.get("video_path", "")).strip()
+    raw_clip = str(request.args.get("clip_id", "")).strip()
+    if not raw_vp:
+        return jsonify({"error": "video_path is required"}), 400
+    if not _is_valid_project_name(name):
+        return jsonify({"error": "invalid project name"}), 400
+    project = next((p for p in _read_projects_db() if p["name"] == name), None)
+    if not project:
+        return jsonify({"error": "project not found"}), 404
+    try:
+        canon_vp = _resolve_stored_video_path(raw_vp)
+    except (ValueError, OSError):
+        return jsonify({"error": "invalid video_path"}), 400
+    videos = project.get("videos") or []
+    if not any(_video_entry_canon_key(v) == canon_vp for v in videos):
+        return jsonify({"error": "video not in project"}), 404
+
+    _quickrun_sync_artifacts_from_jobs_for_video(canon_vp)
+
+    clip_id_int: Optional[int] = None
+    if raw_clip:
+        try:
+            clip_id_int = int(raw_clip)
+        except ValueError:
+            return jsonify({"error": "invalid clip_id"}), 400
+
+    if clip_id_int is not None:
+        clips = _video_subclips_for_video(canon_vp, project_name=name)
+        csv_path = ""
+        for c in clips:
+            if int(c["id"]) == clip_id_int:
+                sc = c.get("source_csv")
+                if sc:
+                    csv_path = str(sc).strip()
+                break
+        if not csv_path:
+            return jsonify({"error": "no total speed CSV for this subclip"}), 404
+        return jsonify(
+            {"ok": True, "path": csv_path, "video_path": canon_vp, "clip_id": clip_id_int},
+        )
+
+    paths = _video_total_speed_csv_paths_for_video(canon_vp, name)
+    if not paths:
+        return jsonify({"error": "no total speed CSV for this video"}), 404
+    return jsonify({"ok": True, "path": paths[0], "video_path": canon_vp, "clip_id": None})
 
 
 def _count_yolo_label_classes_01(text: str) -> Tuple[int, int]:
@@ -1003,6 +1096,24 @@ def _resolve_snapshot_output_base(project: dict) -> Path:
     return p
 
 
+def _resolve_tracking_output_base(project: dict) -> Path:
+    """Where tracking batch outputs are saved (default: workdir/traking)."""
+    raw = str(project.get("tracking_output") or "").strip()
+    wdir = FASTVIEW_WORKDIR.resolve()
+    if not raw:
+        p = (wdir / "traking").resolve()
+    else:
+        pp = Path(raw)
+        if pp.is_absolute():
+            p = pp.expanduser().resolve()
+        else:
+            p = (wdir / raw).resolve()
+    if not any(str(p).startswith(str(b)) for b in ALLOWED_PATH_ROOTS):
+        raise ValueError("Tracking output directory is outside allowed roots.")
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def _snapshot_run_folder_name(video_path: str, frame: int, clip_id: Optional[int] = None) -> str:
     stem = Path(video_path).stem
     stem_safe = re.sub(r"[^\w\-.]+", "_", stem).strip("_")[:80] or "video"
@@ -1026,6 +1137,63 @@ def _snapshot_frame_for_clip(source_csv: str, clip_id: int) -> Optional[int]:
     return None
 
 
+def _clip_frame_window_for_clip(source_csv: str, clip_id: int) -> Optional[tuple[int, int]]:
+    """1-based inclusive [start, end] frame window for one clip id."""
+    try:
+        canon_csv = _total_speed_clips_csv_canonical(source_csv)
+    except ValueError:
+        return None
+    for c in _total_speed_clips_fetch_all(canon_csv):
+        if int(c["id"]) == int(clip_id):
+            s0 = max(1, int(round(float(c["start"]))))
+            e0 = max(s0, int(round(float(c["end"]))))
+            return (s0, e0)
+    return None
+
+
+def _tracking_run_folder_name(
+    video_path: str,
+    frame_start: int,
+    frame_end: Optional[int],
+    clip_id: Optional[int] = None,
+) -> str:
+    stem = Path(video_path).stem
+    stem_safe = re.sub(r"[^\w\-.]+", "_", stem).strip("_")[:80] or "video"
+    end_s = "" if frame_end is None else f"-{int(frame_end)}"
+    key = f"{Path(video_path).resolve()}|{int(frame_start)}|{int(frame_end) if frame_end is not None else ''}|{clip_id if clip_id is not None else ''}"
+    h = hashlib.md5(key.encode()).hexdigest()[:8]
+    if clip_id is not None:
+        return f"{stem_safe}_trk_f{int(frame_start)}{end_s}_c{clip_id}_{h}"
+    return f"{stem_safe}_trk_f{int(frame_start)}{end_s}_{h}"
+
+
+def _snapshot_init_label_for_tracking(
+    canon_path: str,
+    project_name: str,
+    frame_start: int,
+    clip_id: Optional[int] = None,
+) -> Optional[str]:
+    """Best-effort label path from snapshot output matching tracking start frame."""
+    dpath: Optional[Path]
+    if clip_id is None:
+        dpath = _pick_snapshot_dir_for_video_row(canon_path, project_name, frame_start)
+    else:
+        dpath = _pick_snapshot_dir_for_subclip(canon_path, project_name, int(clip_id), frame_start)
+    if dpath is None:
+        return None
+    man = _snapshot_output_manifest(dpath)
+    lab = man.get("label_abs_path")
+    if not lab or not man.get("label_exists"):
+        return None
+    try:
+        lp = Path(str(lab)).resolve()
+    except OSError:
+        return None
+    if not lp.is_file():
+        return None
+    return str(lp)
+
+
 def _build_snapshot_detect_cmd(entry: dict, pipeline_params: dict) -> List[str]:
     """Shell command for one detect_2 snapshot job (matches snapshot_batch API)."""
     pp = pipeline_params
@@ -1042,6 +1210,34 @@ def _build_snapshot_detect_cmd(entry: dict, pipeline_params: dict) -> List[str]:
         "--name", str(entry["snapshot_run_name"]),
         "--exist-ok",
     ]
+
+
+def _build_tracking_detect_cmd(entry: dict, pipeline_params: dict) -> List[str]:
+    """Shell command for one detect_2 tracking job."""
+    pp = pipeline_params
+    cmd = [
+        sys.executable,
+        str(ROOT / "detect_2.py"),
+        "--weights", str(pp["weights"]),
+        "--source", str(entry["path"]),
+        "--conf-thres", str(pp["conf_thres"]),
+        "--img-size", str(pp["img_size"]),
+        "--quiet",
+        "--tar-track",
+        "--tar-tr-start", str(entry["tracking_frame_start"]),
+        "--frame-start", str(entry["tracking_frame_start"]),
+        "--project", str(pp["tracking_project_base"]),
+        "--name", str(entry["tracking_run_name"]),
+        "--tracking-dir", str(entry["tracking_save_dir"]),
+        "--exist-ok",
+    ]
+    fe = entry.get("tracking_frame_end")
+    if fe is not None:
+        cmd.extend(["--frame-end", str(fe)])
+    init_label = str(entry.get("tracking_init_label") or "").strip()
+    if init_label:
+        cmd.extend(["--init-label-path", init_label])
+    return cmd
 
 
 @app.put("/api/project/meta")
@@ -1065,6 +1261,10 @@ def api_put_project_meta():
     snapshot_output, err = _quickrun_sanitize_arg_str(snap_raw, "snapshot_output")
     if err:
         return jsonify({"error": err}), 400
+    trk_raw = data.get("tracking_output", "traking")
+    tracking_output, err = _quickrun_sanitize_arg_str(trk_raw, "tracking_output")
+    if err:
+        return jsonify({"error": err}), 400
     projects = _read_projects_db()
     project = next((p for p in projects if p["name"] == name), None)
     if not project:
@@ -1073,6 +1273,7 @@ def api_put_project_meta():
     project["abstract"] = abstract
     project["quickrun_output"] = quickrun_output
     project["snapshot_output"] = snapshot_output
+    project["tracking_output"] = tracking_output or "traking"
     _write_projects_db(projects)
     return jsonify({"ok": True, "project": _project_detail_payload(project)})
 
@@ -1271,6 +1472,250 @@ def api_project_snapshot_batch():
         "job_count": len(jobs),
         "quickrun_url": f"/quickrun?session={sid}",
         "snapshot_project_base": str(project_base),
+    })
+
+
+@app.post("/api/project/tracking_batch")
+def api_project_tracking_batch():
+    """
+    Queue detect_2.py tracking jobs (one per selected video/subclip).
+    Optional snapshot bootstrap labels are loaded for first tracked frame when available.
+    """
+    data = request.get_json(force=True)
+    name = str(data.get("name", "")).strip()
+    weights = str(data.get("weights", "") or "").strip() or _QUICKRUN_DEFAULT_WEIGHTS
+    conf_raw = data.get("conf_thres")
+    try:
+        conf_thres = float(conf_raw) if conf_raw is not None and str(conf_raw).strip() != "" else 0.4
+    except (TypeError, ValueError):
+        return jsonify({"error": "conf_thres must be a number"}), 400
+    imgsz_raw = data.get("img_size")
+    try:
+        imgsz = int(imgsz_raw) if imgsz_raw is not None and str(imgsz_raw).strip() != "" else 1280
+    except (TypeError, ValueError):
+        return jsonify({"error": "img_size must be an integer"}), 400
+    use_snapshot_init = _quickrun_bool_param(data, "use_snapshot_init", True)
+    allow_missing_init = _quickrun_bool_param(data, "allow_missing_init", False)
+
+    if not _is_valid_project_name(name):
+        return jsonify({"error": "invalid project name"}), 400
+    wpath, werr = _quickrun_sanitize_arg_str(weights, "weights")
+    if werr or not wpath:
+        return jsonify({"error": werr or "invalid weights"}), 400
+    projects = _read_projects_db()
+    project = next((p for p in projects if p["name"] == name), None)
+    if not project:
+        return jsonify({"error": "project not found"}), 404
+    try:
+        project_base = _resolve_tracking_output_base(project)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not (ROOT / "detect_2.py").is_file():
+        return jsonify({"error": "detect_2.py not found"}), 404
+
+    by_path = {
+        _video_entry_canon_key(v): v
+        for v in (project.get("videos") or [])
+        if _video_entry_canon_key(v)
+    }
+    work_items: List[dict] = []
+    items_raw = data.get("items")
+    if isinstance(items_raw, list) and items_raw:
+        for it in items_raw:
+            if not isinstance(it, dict):
+                continue
+            typ = str(it.get("type", "")).strip().lower()
+            if typ == "video":
+                raw_vp = str(it.get("video_path", "")).strip()
+                if not raw_vp:
+                    continue
+                try:
+                    vp = _resolve_stored_video_path(raw_vp)
+                except (ValueError, OSError):
+                    return jsonify({"error": f"invalid video_path: {raw_vp}"}), 400
+                ent = by_path.get(vp)
+                if ent is None:
+                    return jsonify({"error": f"video not in project: {vp}"}), 400
+                fs = _optional_int(ent.get("frame_start"))
+                fe = _optional_int(ent.get("frame_end"))
+                fsn = max(1, int(fs)) if fs is not None else 1
+                fen = int(fe) if fe is not None and int(fe) >= fsn else None
+                work_items.append({
+                    "kind": "video",
+                    "video_path": vp,
+                    "frame_start": fsn,
+                    "frame_end": fen,
+                })
+            elif typ == "subclip":
+                raw_vp = str(it.get("video_path", "")).strip()
+                csv_p = str(it.get("source_csv", "")).strip()
+                if not raw_vp or not csv_p:
+                    return jsonify({"error": "subclip requires video_path and source_csv"}), 400
+                try:
+                    vp = _resolve_stored_video_path(raw_vp)
+                except (ValueError, OSError):
+                    return jsonify({"error": f"invalid video_path: {raw_vp}"}), 400
+                if vp not in by_path:
+                    return jsonify({"error": f"video not in project: {vp}"}), 400
+                try:
+                    cid = int(it["clip_id"])
+                except (KeyError, TypeError, ValueError):
+                    return jsonify({"error": "subclip requires integer clip_id"}), 400
+                win = _clip_frame_window_for_clip(csv_p, cid)
+                if win is None:
+                    return jsonify({"error": f"clip id {cid} not found for source_csv"}), 400
+                fsn, fen = win
+                work_items.append({
+                    "kind": "subclip",
+                    "video_path": vp,
+                    "source_csv": csv_p,
+                    "clip_id": cid,
+                    "frame_start": fsn,
+                    "frame_end": fen,
+                })
+    else:
+        raw_paths = data.get("video_paths")
+        if not isinstance(raw_paths, list) or not raw_paths:
+            return jsonify({"error": "items or video_paths must be a non-empty list"}), 400
+        for raw in raw_paths:
+            ps = str(raw).strip()
+            if not ps:
+                continue
+            try:
+                vp = _resolve_stored_video_path(ps)
+            except (ValueError, OSError):
+                return jsonify({"error": f"invalid video_path: {ps}"}), 400
+            ent = by_path.get(vp)
+            if ent is None:
+                return jsonify({"error": f"video not in project: {vp}"}), 400
+            fs = _optional_int(ent.get("frame_start"))
+            fe = _optional_int(ent.get("frame_end"))
+            fsn = max(1, int(fs)) if fs is not None else 1
+            fen = int(fe) if fe is not None and int(fe) >= fsn else None
+            work_items.append({
+                "kind": "video",
+                "video_path": vp,
+                "frame_start": fsn,
+                "frame_end": fen,
+            })
+
+    if not work_items:
+        return jsonify({"error": "no valid tracking targets"}), 400
+
+    missing_init: List[dict] = []
+    for wi in work_items:
+        init_label: Optional[str] = None
+        if use_snapshot_init:
+            init_label = _snapshot_init_label_for_tracking(
+                wi["video_path"],
+                name,
+                int(wi["frame_start"]),
+                int(wi["clip_id"]) if wi.get("kind") == "subclip" else None,
+            )
+            if not init_label:
+                item_desc = {
+                    "kind": wi["kind"],
+                    "video_path": wi["video_path"],
+                    "frame_start": int(wi["frame_start"]),
+                }
+                if wi.get("clip_id") is not None:
+                    item_desc["clip_id"] = int(wi["clip_id"])
+                missing_init.append(item_desc)
+        wi["tracking_init_label"] = init_label
+    if use_snapshot_init and missing_init and not allow_missing_init:
+        return jsonify({
+            "error": (
+                f"{len(missing_init)} target(s) do not have snapshot labels for the tracking start frame. "
+                "Continue to use model output for those targets?"
+            ),
+            "missing_init": missing_init,
+            "missing_count": len(missing_init),
+        }), 409
+
+    sid = uuid.uuid4().hex
+    sdir = QUICKRUN_SESSIONS_ROOT / sid
+    try:
+        sdir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    rerun_tracking = _quickrun_bool_param(data, "rerun", False)
+    pipeline_params = {
+        "session_kind": "tracking",
+        "weights": wpath,
+        "conf_thres": conf_thres,
+        "img_size": imgsz,
+        "tracking_project_base": str(project_base),
+        "rerun": rerun_tracking,
+        "use_snapshot_init": use_snapshot_init,
+    }
+
+    jobs: List[dict] = []
+    for i, wi in enumerate(work_items):
+        vp = wi["video_path"]
+        fname = Path(vp).name
+        fsn = int(wi["frame_start"])
+        fen = int(wi["frame_end"]) if wi.get("frame_end") is not None else None
+        cid = int(wi["clip_id"]) if wi.get("kind") == "subclip" else None
+        run_name = _tracking_run_folder_name(vp, fsn, fen, cid)
+        save_dir = (project_base / run_name).resolve()
+        label = f"{fname} · clip {cid}" if cid is not None else fname
+
+        ent_match = by_path.get(vp)
+        assert ent_match is not None
+        snap = _video_entry_snapshot(ent_match)
+        snap["job_kind"] = "tracking"
+        snap["tracking_frame_start"] = fsn
+        snap["tracking_frame_end"] = fen
+        snap["tracking_run_name"] = run_name
+        snap["tracking_save_dir"] = str(save_dir)
+        if wi.get("tracking_init_label"):
+            snap["tracking_init_label"] = str(wi["tracking_init_label"])
+        if wi["kind"] == "subclip":
+            snap["subclip_source_csv"] = wi["source_csv"]
+            snap["subclip_clip_id"] = int(wi["clip_id"])
+
+        placeholder_tsv = sdir / f"{i:04d}.tsv"
+        try:
+            placeholder_tsv.write_text("", encoding="utf-8")
+        except OSError as exc:
+            return jsonify({"error": str(exc)}), 500
+        jobs.append({
+            "id": f"t{i}",
+            "video_path": vp,
+            "video_label": label,
+            "status": "queued",
+            "entry_snapshot": snap,
+            "tsv_path": str(placeholder_tsv.resolve()),
+            "log_path": str((sdir / f"{i:04d}.log").resolve()),
+            "pid": None,
+            "started_at": None,
+            "finished_at": None,
+            "exit_code": None,
+            "error_message": None,
+            "log_tail": "",
+            "outputs": None,
+        })
+
+    sess = {
+        "id": sid,
+        "project": name,
+        "created_at": _utc_now_iso(),
+        "finished_at": None,
+        "session_status": "running",
+        "pipeline_params": pipeline_params,
+        "workdir": str(FASTVIEW_WORKDIR.resolve()),
+        "jobs": jobs,
+    }
+    _quickrun_insert_session(sess)
+    threading.Thread(target=_quickrun_run_session_worker, args=(sid,), daemon=True).start()
+    return jsonify({
+        "ok": True,
+        "session_id": sid,
+        "job_count": len(jobs),
+        "quickrun_url": f"/quickrun?session={sid}",
+        "tracking_project_base": str(project_base),
+        "missing_init_used_model_output": len(missing_init) if use_snapshot_init else 0,
     })
 
 
@@ -2141,6 +2586,65 @@ def _video_subclips_for_video(
 ) -> List[dict]:
     """Saved clips from Total speed — interactive plot (/api/total_speed_clips) for this video."""
     paths = _video_total_speed_csv_paths_for_video(canon_video_path, project_name)
+    tracking_dirs: Dict[int, str] = {}
+    _quickrun_ensure_db()
+    with _QUICKRUN_SESSION_LOCK:
+        conn = sqlite3.connect(str(QUICKRUN_DB_PATH), timeout=60.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+
+            def q_rows(for_project: Optional[str]) -> List[sqlite3.Row]:
+                if for_project and _is_valid_project_name(for_project):
+                    return list(conn.execute(
+                        """
+                        SELECT clip_scope, artifact_path
+                        FROM quickrun_video_artifacts
+                        WHERE video_path = ?
+                          AND artifact_kind = 'output_directory'
+                          AND clip_scope > 0
+                          AND project = ?
+                          AND lower(COALESCE(artifact_label, '')) LIKE '%tracking%'
+                        ORDER BY COALESCE(finished_at, '') DESC, rowid DESC
+                        """,
+                        (canon_video_path, for_project),
+                    ).fetchall())
+                return list(conn.execute(
+                    """
+                    SELECT clip_scope, artifact_path
+                    FROM quickrun_video_artifacts
+                    WHERE video_path = ?
+                      AND artifact_kind = 'output_directory'
+                      AND clip_scope > 0
+                      AND lower(COALESCE(artifact_label, '')) LIKE '%tracking%'
+                    ORDER BY COALESCE(finished_at, '') DESC, rowid DESC
+                    """,
+                    (canon_video_path,),
+                ).fetchall())
+
+            rows = q_rows(project_name)
+            if not rows and project_name and _is_valid_project_name(project_name):
+                rows = q_rows(None)
+            for r in rows:
+                try:
+                    cid = int(r["clip_scope"])
+                except (TypeError, ValueError):
+                    continue
+                if cid in tracking_dirs:
+                    continue
+                p = str(r["artifact_path"] or "").strip()
+                if not p:
+                    continue
+                try:
+                    dp = Path(p).resolve()
+                except OSError:
+                    continue
+                if not dp.is_dir():
+                    continue
+                tracking_dirs[cid] = str(dp)
+        finally:
+            conn.close()
+
     out: List[dict] = []
     seen: set[int] = set()
     for csv_p in paths:
@@ -2151,6 +2655,8 @@ def _video_subclips_for_video(
             seen.add(cid)
             row = dict(c)
             row["source_csv"] = csv_p
+            row["tracking_output_dir"] = tracking_dirs.get(cid)
+            row["has_tracking"] = bool(row["tracking_output_dir"])
             out.append(row)
     out.sort(key=lambda x: (float(x["start"]), int(x["id"])))
     return out
@@ -2182,7 +2688,7 @@ def _quickrun_clip_scope_from_entry(entry: Optional[dict]) -> int:
     """-1 = main video row; positive DB id = one subclip’s artifacts only."""
     if not isinstance(entry, dict):
         return -1
-    if entry.get("job_kind") == "snapshot" and entry.get("subclip_clip_id") is not None:
+    if entry.get("subclip_clip_id") is not None:
         try:
             return int(entry["subclip_clip_id"])
         except (TypeError, ValueError):
@@ -2208,6 +2714,8 @@ def _quickrun_outputs_to_artifact_entries(outputs: dict) -> List[tuple[str, str,
     add("output_directory", outputs.get("output_directory"), "Output directory")
     if outputs.get("job_kind") == "snapshot" and outputs.get("snapshot_save_dir"):
         add("output_directory", outputs.get("snapshot_save_dir"), "Snapshot output")
+    if outputs.get("job_kind") == "tracking" and outputs.get("tracking_save_dir"):
+        add("output_directory", outputs.get("tracking_save_dir"), "Tracking output")
     for p in outputs.get("plots") or []:
         if isinstance(p, dict):
             lab = str(p.get("label") or "").strip() or "Plot"
@@ -2789,11 +3297,31 @@ def _quickrun_fastview_detection_csv_exists(video_abs: str, params: dict) -> boo
         return False
 
 
+def _quickrun_tracking_outputs_exist(entry: dict, params: dict) -> bool:
+    """True if tracking output folder has at least one JSON artifact."""
+    try:
+        base = Path(params["tracking_project_base"])
+        run_name = str(entry.get("tracking_run_name") or "").strip()
+        if not run_name:
+            return False
+        save_dir = (base / run_name).resolve()
+    except (TypeError, OSError, ValueError):
+        return False
+    if not save_dir.is_dir():
+        return False
+    try:
+        return any(save_dir.glob("*.json"))
+    except OSError:
+        return False
+
+
 def _quickrun_job_outputs_already_exist(sess: dict, job: dict) -> bool:
     entry = job["entry_snapshot"]
     params = sess["pipeline_params"]
     if entry.get("job_kind") == "snapshot":
         return _quickrun_snapshot_outputs_exist(entry, params)
+    if entry.get("job_kind") == "tracking":
+        return _quickrun_tracking_outputs_exist(entry, params)
     vp = entry.get("path")
     if not vp:
         return False
@@ -2815,6 +3343,40 @@ def _quickrun_fill_job_outputs_done(
         job["outputs"] = {
             "job_kind": "snapshot",
             "snapshot_save_dir": str(save_dir),
+        }
+        if skipped_existing:
+            job["outputs"]["skipped_existing"] = True
+        _quickrun_persist_video_artifacts_for_job(
+            str(ent["path"]),
+            sess["project"],
+            sid,
+            job["id"],
+            job["finished_at"],
+            sess["pipeline_params"],
+            job["outputs"],
+            ent,
+        )
+    elif ent.get("job_kind") == "tracking":
+        pp = sess["pipeline_params"]
+        save_dir = Path(str(ent["tracking_save_dir"])).resolve()
+        video_name = Path(str(ent["path"])).name
+        expected_json = save_dir / f"{video_name}_{int(ent['tracking_frame_start'])}_.json"
+        tracked_json: Optional[Path] = expected_json if expected_json.is_file() else None
+        if tracked_json is None:
+            try:
+                jfiles = sorted(save_dir.glob("*.json"))
+                tracked_json = jfiles[0] if jfiles else None
+            except OSError:
+                tracked_json = None
+        det_csv = save_dir / video_name
+        if not det_csv.suffix.lower() == ".csv":
+            det_csv = save_dir / f"{video_name}.csv"
+        job["outputs"] = {
+            "job_kind": "tracking",
+            "tracking_save_dir": str(save_dir),
+            "tracked_json": str(tracked_json.resolve()) if tracked_json and tracked_json.is_file() else None,
+            "detection_csv": str(det_csv.resolve()) if det_csv.is_file() else None,
+            "weights_resolved": str(pp.get("weights", "")) if pp.get("weights") else None,
         }
         if skipped_existing:
             job["outputs"]["skipped_existing"] = True
@@ -2850,7 +3412,7 @@ def _quickrun_run_session_worker(sid: str) -> None:
     if sess0 is None:
         return
     sk = sess0["pipeline_params"].get("session_kind", "fastview")
-    if sk == "snapshot":
+    if sk in ("snapshot", "tracking"):
         if not (ROOT / "detect_2.py").is_file():
             _quickrun_fail_session(sess0, "detect_2.py not found")
             return
@@ -2917,6 +3479,8 @@ def _quickrun_run_session_worker(sid: str) -> None:
 
         if entry.get("job_kind") == "snapshot":
             cmd = _build_snapshot_detect_cmd(entry, params)
+        elif entry.get("job_kind") == "tracking":
+            cmd = _build_tracking_detect_cmd(entry, params)
         else:
             tsv = Path(job["tsv_path"])
             cmd = _build_quickrun_cmd(script, tsv, params)
@@ -3314,6 +3878,47 @@ def _snapshot_output_manifest(save_dir: Path) -> dict:
     }
 
 
+def _tracking_output_manifest(save_dir: Path, video_path: Optional[str] = None) -> dict:
+    """
+    detect_2 tracking output folder: contains <video_name>.csv and one or more
+    <video_name>_<frame_start>_.json files. If video_path is provided, prefer matching basenames.
+    """
+    save_dir = save_dir.resolve()
+    if not save_dir.is_dir():
+        return {"ok": False, "error": "not a directory"}
+    csv_list = sorted(save_dir.glob("*.csv"))
+    json_list = sorted(save_dir.glob("*.json"))
+    if video_path:
+        base = Path(str(video_path)).name
+        csv_match = [p for p in csv_list if p.name.startswith(base)]
+        json_match = [p for p in json_list if p.name.startswith(base + "_") or p.name.startswith(base)]
+        if csv_match:
+            csv_list = csv_match
+        if json_match:
+            json_list = json_match
+    csv_p = csv_list[0] if csv_list else None
+    json_p = json_list[0] if json_list else None
+    frame_min = None
+    frame_max = None
+    if json_p and json_p.is_file():
+        try:
+            idx = _build_tracking_index(json_p)
+            frame_min = idx.get("frame_min")
+            frame_max = idx.get("frame_max")
+        except Exception:
+            frame_min = None
+            frame_max = None
+    return {
+        "ok": True,
+        "save_dir": str(save_dir),
+        "csv_abs_path": str(csv_p.resolve()) if csv_p else None,
+        "json_abs_path": str(json_p.resolve()) if json_p else None,
+        "video_path": video_path or "",
+        "frame_min": frame_min,
+        "frame_max": frame_max,
+    }
+
+
 @app.get("/api/snapshot_explore/manifest")
 def api_snapshot_explore_manifest():
     """Resolve raw PNG + label paths for deep-linking /detect_explore?snapshot_dir=…"""
@@ -3327,6 +3932,43 @@ def api_snapshot_explore_manifest():
     man = _snapshot_output_manifest(save_dir)
     if not man.get("ok"):
         return jsonify({"error": man.get("error", "invalid directory")}), 400
+    return jsonify(man)
+
+
+@app.get("/api/tracking_explore/manifest")
+def api_tracking_explore_manifest():
+    """Resolve video/csv/json paths for deep-linking /detect_explore?tracking_dir=…"""
+    raw = str(request.args.get("dir", "")).strip()
+    if not raw:
+        return jsonify({"error": "dir is required"}), 400
+    raw_video = str(request.args.get("video_path", "")).strip()
+    video_path: Optional[str] = None
+    if raw_video:
+        try:
+            video_path = _resolve_stored_video_path(raw_video)
+        except (ValueError, OSError):
+            return jsonify({"error": "invalid video_path"}), 400
+    try:
+        save_dir = _safe_path_any(raw)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    man = _tracking_output_manifest(save_dir, video_path=video_path)
+    if not man.get("ok"):
+        return jsonify({"error": man.get("error", "invalid directory")}), 400
+    if not man.get("video_path"):
+        csv_abs = str(man.get("csv_abs_path") or "")
+        if csv_abs:
+            guess_name = Path(csv_abs).name
+            if guess_name.lower().endswith(".csv"):
+                guess_name = guess_name[:-4]
+            for p in _read_projects_db():
+                for e in p.get("videos") or []:
+                    vp = _video_entry_canon_key(e)
+                    if vp and Path(vp).name == guess_name:
+                        man["video_path"] = vp
+                        break
+                if man.get("video_path"):
+                    break
     return jsonify(man)
 
 
@@ -3443,7 +4085,10 @@ def api_json_files():
 def api_csv_preview():
     rel = request.args.get("path", "")
     limit = int(request.args.get("limit", "200"))
-    f = _safe_join(CSV_ROOT, rel)
+    try:
+        f = _safe_csv_or_any(rel)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not f.exists():
         return jsonify({"error": "csv not found"}), 404
     rows = []
@@ -3464,7 +4109,10 @@ def api_csv_preview():
 def api_csv_detections():
     """Load full detection rows from csv file for frame-wise plotting."""
     rel = request.args.get("path", "")
-    f = _safe_join(CSV_ROOT, rel)
+    try:
+        f = _safe_csv_or_any(rel)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not f.exists():
         return jsonify({"error": "csv not found"}), 404
     rows = []
@@ -3484,7 +4132,10 @@ def api_csv_detections():
 @app.get("/api/csv_index")
 def api_csv_index():
     rel = request.args.get("path", "")
-    f = _safe_join(CSV_ROOT, rel)
+    try:
+        f = _safe_csv_or_any(rel)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not f.exists():
         return jsonify({"error": "csv not found"}), 404
     idx = _build_csv_index(f)
@@ -3502,7 +4153,10 @@ def api_csv_index():
 def api_csv_frame_boxes():
     rel = request.args.get("path", "")
     frame = int(request.args.get("frame", "1"))
-    f = _safe_join(CSV_ROOT, rel)
+    try:
+        f = _safe_csv_or_any(rel)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not f.exists():
         return jsonify({"error": "csv not found"}), 404
     idx = _build_csv_index(f)
@@ -3512,7 +4166,10 @@ def api_csv_frame_boxes():
 @app.get("/api/tracking_index")
 def api_tracking_index():
     rel = request.args.get("path", "")
-    f = _safe_join(CSV_ROOT, rel)
+    try:
+        f = _safe_csv_or_any(rel)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not f.exists():
         return jsonify({"error": "json not found"}), 404
     idx = _build_tracking_index(f)
@@ -3529,7 +4186,10 @@ def api_tracking_frame():
     rel = request.args.get("path", "")
     frame = int(request.args.get("frame", "1"))
     history = max(0, min(int(request.args.get("history", "0")), 500))
-    f = _safe_join(CSV_ROOT, rel)
+    try:
+        f = _safe_csv_or_any(rel)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not f.exists():
         return jsonify({"error": "json not found"}), 404
     idx = _build_tracking_index(f)
