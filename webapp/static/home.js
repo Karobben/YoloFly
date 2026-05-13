@@ -26,6 +26,7 @@ const closeVideoModalBtn = document.getElementById("closeVideoModalBtn");
 const videoFullscreenBtn = document.getElementById("videoFullscreenBtn");
 const videoSubclipSelectAll = document.getElementById("videoSubclipSelectAll");
 const videoColHeader = document.getElementById("videoColHeader");
+const videoFoldAllBtn = document.getElementById("videoFoldAllBtn");
 
 const MEASURE_HIT_PX = 14;
 /** Pauses at end of meta/subclip frame window (see openVideoModal). */
@@ -239,9 +240,26 @@ const closeQuickRunModalBtn = document.getElementById("closeQuickRunModalBtn");
 const quickRunStartBtn = document.getElementById("quickRunStartBtn");
 const quickRunResetDefaultsBtn = document.getElementById("quickRunResetDefaultsBtn");
 const quickRunModalStatus = document.getElementById("quickRunModalStatus");
+const trackingBatchModal = document.getElementById("trackingBatchModal");
+const trackingBatchScopeText = document.getElementById("trackingBatchScopeText");
+const closeTrackingBatchModalBtn = document.getElementById("closeTrackingBatchModalBtn");
+const trackingBatchStartBtn = document.getElementById("trackingBatchStartBtn");
+const trackingBatchResetDefaultsBtn = document.getElementById("trackingBatchResetDefaultsBtn");
+const trackingBatchModalStatus = document.getElementById("trackingBatchModalStatus");
+const trackingOpenModal = document.getElementById("trackingOpenModal");
+const trackingOpenModalParams = document.getElementById("trackingOpenModalParams");
+const trackingOpenModalManifest = document.getElementById("trackingOpenModalManifest");
+const closeTrackingOpenModalBtn = document.getElementById("closeTrackingOpenModalBtn");
+const trackingOpenConfirmBtn = document.getElementById("trackingOpenConfirmBtn");
 const quickRunWorkers = document.getElementById("quickRunWorkers");
 const quickRunWindowOverlap = document.getElementById("quickRunWindowOverlap");
 const quickRunSpeedWindow = document.getElementById("quickRunSpeedWindow");
+const quickRunGamSplines = document.getElementById("quickRunGamSplines");
+const quickRunGamGridPoints = document.getElementById("quickRunGamGridPoints");
+const quickRunPeakPromFactor = document.getElementById("quickRunPeakPromFactor");
+const quickRunPeakMinDistance = document.getElementById("quickRunPeakMinDistance");
+const quickRunClipDurationMin = document.getElementById("quickRunClipDurationMin");
+const quickRunClipFps = document.getElementById("quickRunClipFps");
 const quickRunOutputDir = document.getElementById("quickRunOutputDir");
 const quickRunWeights = document.getElementById("quickRunWeights");
 const quickRunFrameSkip = document.getElementById("quickRunFrameSkip");
@@ -254,6 +272,25 @@ const quickRunSkipDetect = document.getElementById("quickRunSkipDetect");
 const quickRunSkipTrack = document.getElementById("quickRunSkipTrack");
 const quickRunSkipViz = document.getElementById("quickRunSkipViz");
 const quickRunRerun = document.getElementById("quickRunRerun");
+const trackingBatchOutputDir = document.getElementById("trackingBatchOutputDir");
+const trackingBatchWeights = document.getElementById("trackingBatchWeights");
+const trackingBatchDevice = document.getElementById("trackingBatchDevice");
+const trackingBatchConfThres = document.getElementById("trackingBatchConfThres");
+const trackingBatchImgSize = document.getElementById("trackingBatchImgSize");
+const trackingBatchNameOverride = document.getElementById("trackingBatchNameOverride");
+const trackingBatchDirOverride = document.getElementById("trackingBatchDirOverride");
+const trackingBatchTarTrStart = document.getElementById("trackingBatchTarTrStart");
+const trackingBatchFrameStart = document.getElementById("trackingBatchFrameStart");
+const trackingBatchFrameEnd = document.getElementById("trackingBatchFrameEnd");
+const trackingBatchQuiet = document.getElementById("trackingBatchQuiet");
+const trackingBatchExistOk = document.getElementById("trackingBatchExistOk");
+const trackingBatchDetectFlagsSection = document.getElementById("trackingBatchDetectFlagsSection");
+const trackingBatchInitLabelPath = document.getElementById("trackingBatchInitLabelPath");
+const trackingBatchUseSnapshotInit = document.getElementById("trackingBatchUseSnapshotInit");
+const trackingBatchAllowMissingInit = document.getElementById("trackingBatchAllowMissingInit");
+const trackingBatchRerun = document.getElementById("trackingBatchRerun");
+const trackingBatchSourcePreview = document.getElementById("trackingBatchSourcePreview");
+const trackingBatchDerivedPreview = document.getElementById("trackingBatchDerivedPreview");
 const videoMetaTsvPath = document.getElementById("videoMetaTsvPath");
 const importVideoMetaTsvBtn = document.getElementById("importVideoMetaTsvBtn");
 const exportVideoMetaTsvBtn = document.getElementById("exportVideoMetaTsvBtn");
@@ -265,13 +302,30 @@ let selectedProject = "";
 let editingVideoPath = "";
 /** When non-null, QuickRun uses only these paths; null means all project videos. */
 let quickRunVideoPaths = null;
+/** Selected videos/subclips captured when the Tracking Batch modal opens. */
+let trackingBatchItems = null;
 /** Last full project payload from the server (for QuickRun default output dir, etc.). */
 let cachedProjectDetail = null;
+/** Registered video table sort: `key` null = server order. */
+let videoTableSort = { key: null, dir: "asc" };
+/** Snapshot API counts (for sorting Detected Flies before cells are filled). */
+let gSnapshotCountsForSort = { counts: {}, clip_counts: {} };
+/** Per main-row video path: clip count from /api/project/video_subclips (for Clips column sort). Cleared when switching project. */
+let gClipCountsForSort = Object.create(null);
+let gClipCountsForSortProject = null;
+/** Full URL path for Detect explorer after Tracking review modal (path + query only). */
+let trackingOpenPendingUrl = "";
 
 const QUICK_RUN_DEFAULTS = {
   workers: 64,
   windowOverlap: 200,
   speedWindow: 300,
+  gamSplines: 25,
+  gamGridPoints: 200,
+  peakProminenceFactor: 0.2,
+  peakMinDistanceFrames: 0,
+  autoClipDurationMin: 10,
+  autoClipFps: 30,
   outputDir: "QuickTestForAging",
   weights: "YoloFly/runs/train/2022_05_11_p633_1280_5l_e700_b128/weights/best.pt",
   frameSkip: 30,
@@ -286,11 +340,37 @@ const QUICK_RUN_DEFAULTS = {
   rerun: false,
 };
 
+const TRACKING_BATCH_DEFAULTS = {
+  outputDir: "traking",
+  weights: QUICK_RUN_DEFAULTS.weights,
+  device: "",
+  confThres: 0.4,
+  imgSize: 1280,
+  nameOverride: "",
+  dirOverride: "",
+  tarTrStart: "",
+  frameStart: "",
+  frameEnd: "",
+  quiet: true,
+  existOk: true,
+  detectFlagsSection: false,
+  initLabelPath: "",
+  useSnapshotInit: true,
+  allowMissingInit: false,
+  rerun: false,
+};
+
 function applyQuickRunDefaultsToForm() {
   if (!quickRunWorkers) return;
   quickRunWorkers.value = String(QUICK_RUN_DEFAULTS.workers);
   quickRunWindowOverlap.value = String(QUICK_RUN_DEFAULTS.windowOverlap);
   quickRunSpeedWindow.value = String(QUICK_RUN_DEFAULTS.speedWindow);
+  if (quickRunGamSplines) quickRunGamSplines.value = String(QUICK_RUN_DEFAULTS.gamSplines);
+  if (quickRunGamGridPoints) quickRunGamGridPoints.value = String(QUICK_RUN_DEFAULTS.gamGridPoints);
+  if (quickRunPeakPromFactor) quickRunPeakPromFactor.value = String(QUICK_RUN_DEFAULTS.peakProminenceFactor);
+  if (quickRunPeakMinDistance) quickRunPeakMinDistance.value = String(QUICK_RUN_DEFAULTS.peakMinDistanceFrames);
+  if (quickRunClipDurationMin) quickRunClipDurationMin.value = String(QUICK_RUN_DEFAULTS.autoClipDurationMin);
+  if (quickRunClipFps) quickRunClipFps.value = String(QUICK_RUN_DEFAULTS.autoClipFps);
   quickRunOutputDir.value = QUICK_RUN_DEFAULTS.outputDir;
   quickRunWeights.value = QUICK_RUN_DEFAULTS.weights;
   quickRunFrameSkip.value = String(QUICK_RUN_DEFAULTS.frameSkip);
@@ -303,6 +383,29 @@ function applyQuickRunDefaultsToForm() {
   quickRunSkipTrack.checked = QUICK_RUN_DEFAULTS.skipTrack;
   quickRunSkipViz.checked = QUICK_RUN_DEFAULTS.skipVisualize;
   quickRunRerun.checked = QUICK_RUN_DEFAULTS.rerun;
+}
+
+function applyTrackingBatchDefaultsToForm() {
+  if (!trackingBatchOutputDir) return;
+  trackingBatchOutputDir.value = TRACKING_BATCH_DEFAULTS.outputDir;
+  trackingBatchWeights.value = TRACKING_BATCH_DEFAULTS.weights;
+  if (trackingBatchDevice) trackingBatchDevice.value = TRACKING_BATCH_DEFAULTS.device;
+  trackingBatchConfThres.value = String(TRACKING_BATCH_DEFAULTS.confThres);
+  trackingBatchImgSize.value = String(TRACKING_BATCH_DEFAULTS.imgSize);
+  trackingBatchNameOverride.value = TRACKING_BATCH_DEFAULTS.nameOverride;
+  trackingBatchDirOverride.value = TRACKING_BATCH_DEFAULTS.dirOverride;
+  trackingBatchTarTrStart.value = TRACKING_BATCH_DEFAULTS.tarTrStart;
+  trackingBatchFrameStart.value = TRACKING_BATCH_DEFAULTS.frameStart;
+  trackingBatchFrameEnd.value = TRACKING_BATCH_DEFAULTS.frameEnd;
+  trackingBatchQuiet.checked = TRACKING_BATCH_DEFAULTS.quiet;
+  trackingBatchExistOk.checked = TRACKING_BATCH_DEFAULTS.existOk;
+  if (trackingBatchDetectFlagsSection) {
+    trackingBatchDetectFlagsSection.checked = TRACKING_BATCH_DEFAULTS.detectFlagsSection;
+  }
+  trackingBatchInitLabelPath.value = TRACKING_BATCH_DEFAULTS.initLabelPath;
+  trackingBatchUseSnapshotInit.checked = TRACKING_BATCH_DEFAULTS.useSnapshotInit;
+  trackingBatchAllowMissingInit.checked = TRACKING_BATCH_DEFAULTS.allowMissingInit;
+  trackingBatchRerun.checked = TRACKING_BATCH_DEFAULTS.rerun;
 }
 
 function openQuickRunModal(selectedPaths) {
@@ -328,6 +431,94 @@ function openQuickRunModal(selectedPaths) {
 
 function closeQuickRunModal() {
   if (quickRunModal) quickRunModal.classList.add("hidden");
+}
+
+function summarizeTrackingBatchItems(items) {
+  const videos = items.filter((it) => it && it.type === "video").length;
+  const subclips = items.filter((it) => it && it.type === "subclip").length;
+  const parts = [];
+  if (videos) parts.push(`${videos} video(s)`);
+  if (subclips) parts.push(`${subclips} subclip(s)`);
+  return parts.length ? parts.join(" and ") : "no targets";
+}
+
+function projectVideoEntryByPath(path) {
+  const videos = cachedProjectDetail && Array.isArray(cachedProjectDetail.videos)
+    ? cachedProjectDetail.videos
+    : [];
+  return videos.find((v) => {
+    if (typeof v === "string") return v === path;
+    return v && v.path === path;
+  });
+}
+
+function trackingBatchItemPreview(item) {
+  if (!item || !item.video_path) return "";
+  const name = item.video_path.split(/[\\/]/).pop() || item.video_path;
+  if (item.type === "subclip") {
+    const bits = [`subclip ${item.clip_id}`, name];
+    if (item.frame_start || item.frame_end) {
+      bits.push(`frames ${item.frame_start || "?"}-${item.frame_end || "?"}`);
+    }
+    return bits.join(" · ");
+  }
+  const ent = projectVideoEntryByPath(item.video_path);
+  if (ent && typeof ent === "object") {
+    const fs = ent.frame_start != null && ent.frame_start !== "" ? ent.frame_start : "auto 1";
+    const fe = ent.frame_end != null && ent.frame_end !== "" ? ent.frame_end : "auto none";
+    return `video · ${name} · frames ${fs}-${fe}`;
+  }
+  return `video · ${name}`;
+}
+
+function updateTrackingBatchDerivedPreview() {
+  if (!trackingBatchItems) return;
+  if (trackingBatchSourcePreview) {
+    trackingBatchSourcePreview.value = trackingBatchItems
+      .map((it) => it.video_path)
+      .join("\n");
+  }
+  if (trackingBatchDerivedPreview) {
+    const lines = [
+      "--source: one selected video path per job",
+      "Optional flags section: when checked, adds --bh-count, --tar-track + --tar-tr-start, --head-bind (default off)",
+      "--tar-tr-start override in Frames only applies when the optional flags section is enabled",
+      "--frame-start: row/subclip start unless override is set",
+      "--frame-end: row/subclip end when available unless override is set",
+      "--device: if set to comma-separated GPU ids (e.g. 0,1,2), tracking jobs run in parallel (one active job per GPU)",
+      "--name: auto-generated per target unless a single-target override is set",
+      "--tracking-dir: <tracking output base>/<auto name> unless a single-target override is set",
+      "--init-label-path: Snapshot label lookup unless an override is set",
+      "",
+      "Targets:",
+      ...trackingBatchItems.map((it, idx) => `${idx + 1}. ${trackingBatchItemPreview(it)}`),
+    ];
+    trackingBatchDerivedPreview.value = lines.join("\n");
+  }
+}
+
+function openTrackingBatchModal(items) {
+  if (!trackingBatchModal) return;
+  trackingBatchItems = items.slice();
+  if (trackingBatchScopeText) {
+    trackingBatchScopeText.textContent = `Will run tracking on ${summarizeTrackingBatchItems(trackingBatchItems)}.`;
+  }
+  if (trackingBatchModalStatus) trackingBatchModalStatus.textContent = "";
+  applyTrackingBatchDefaultsToForm();
+  if (
+    trackingBatchOutputDir &&
+    cachedProjectDetail &&
+    cachedProjectDetail.name === selectedProject &&
+    (cachedProjectDetail.tracking_output || "").trim()
+  ) {
+    trackingBatchOutputDir.value = cachedProjectDetail.tracking_output.trim();
+  }
+  updateTrackingBatchDerivedPreview();
+  trackingBatchModal.classList.remove("hidden");
+}
+
+function closeTrackingBatchModal() {
+  if (trackingBatchModal) trackingBatchModal.classList.add("hidden");
 }
 
 function setProjectMetaStatus(msg) {
@@ -359,6 +550,12 @@ function collectQuickRunPayload() {
   const workers = parseInt(quickRunWorkers.value, 10);
   const window_overlap = parseInt(quickRunWindowOverlap.value, 10);
   const speed_window = parseInt(quickRunSpeedWindow.value, 10);
+  const gam_splines = parseInt(quickRunGamSplines.value, 10);
+  const gam_grid_points = parseInt(quickRunGamGridPoints.value, 10);
+  const peak_prominence_factor = parseFloat(quickRunPeakPromFactor.value);
+  const peak_min_distance_frames = parseInt(quickRunPeakMinDistance.value, 10);
+  const auto_clip_duration_min = parseFloat(quickRunClipDurationMin.value);
+  const auto_clip_fps = parseInt(quickRunClipFps.value, 10);
   const frame_skip = parseInt(quickRunFrameSkip.value, 10);
   const imgsz = parseInt(quickRunImgsz.value, 10);
   const limit = parseInt(quickRunLimit.value, 10);
@@ -368,6 +565,12 @@ function collectQuickRunPayload() {
     ["workers", workers],
     ["window overlap", window_overlap],
     ["speed window", speed_window],
+    ["GAM splines", gam_splines],
+    ["GAM grid frames", gam_grid_points],
+    ["peak prominence factor", peak_prominence_factor],
+    ["peak min distance frames", peak_min_distance_frames],
+    ["auto subclip duration", auto_clip_duration_min],
+    ["auto subclip fps", auto_clip_fps],
     ["frame skip", frame_skip],
     ["imgsz", imgsz],
     ["limit", limit],
@@ -382,6 +585,12 @@ function collectQuickRunPayload() {
     workers,
     window_overlap,
     speed_window,
+    gam_splines,
+    gam_grid_points,
+    peak_prominence_factor,
+    peak_min_distance_frames,
+    auto_clip_duration_min,
+    auto_clip_fps,
     output_dir: (quickRunOutputDir.value || "").trim(),
     weights: (quickRunWeights.value || "").trim(),
     frame_skip,
@@ -399,6 +608,53 @@ function collectQuickRunPayload() {
     body.video_paths = quickRunVideoPaths;
   }
   return body;
+}
+
+function collectTrackingBatchPayload(allowMissingInitOverride) {
+  if (!trackingBatchItems || !trackingBatchItems.length) {
+    throw new Error("Select at least one video and/or subclip for tracking batch.");
+  }
+  const conf_thres = parseFloat(trackingBatchConfThres.value);
+  const img_size = parseInt(trackingBatchImgSize.value, 10);
+  const tar_tr_start_override = parseOptionalPositiveIntInput(trackingBatchTarTrStart, "--tar-tr-start override");
+  const frame_start_override = parseOptionalPositiveIntInput(trackingBatchFrameStart, "--frame-start override");
+  const frame_end_override = parseOptionalPositiveIntInput(trackingBatchFrameEnd, "--frame-end override");
+  if (!Number.isFinite(conf_thres)) throw new Error("confidence threshold must be a valid number.");
+  if (!Number.isFinite(img_size)) throw new Error("image size must be a valid integer.");
+  return {
+    name: selectedProject,
+    items: trackingBatchItems,
+    weights: (trackingBatchWeights.value || "").trim(),
+    device: (trackingBatchDevice && trackingBatchDevice.value ? trackingBatchDevice.value : "").trim(),
+    tracking_output: (trackingBatchOutputDir.value || "").trim(),
+    conf_thres,
+    img_size,
+    run_name_override: (trackingBatchNameOverride.value || "").trim(),
+    tracking_dir_override: (trackingBatchDirOverride.value || "").trim(),
+    tar_tr_start_override,
+    frame_start_override,
+    frame_end_override,
+    quiet: trackingBatchQuiet.checked,
+    exist_ok: trackingBatchExistOk.checked,
+    tracking_detect_flags: !!(trackingBatchDetectFlagsSection && trackingBatchDetectFlagsSection.checked),
+    init_label_path_override: (trackingBatchInitLabelPath.value || "").trim(),
+    use_snapshot_init: trackingBatchUseSnapshotInit.checked,
+    allow_missing_init:
+      allowMissingInitOverride != null
+        ? !!allowMissingInitOverride
+        : trackingBatchAllowMissingInit.checked,
+    rerun: trackingBatchRerun.checked,
+  };
+}
+
+function parseOptionalPositiveIntInput(el, label) {
+  const raw = (el && el.value ? el.value : "").trim();
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    throw new Error(`${label} must be a positive integer, or blank for auto.`);
+  }
+  return n;
 }
 
 function setStatus(msg) {
@@ -433,7 +689,106 @@ function videoRowSplitText(rec) {
   return `${fmtVideoMetaCell(r.split_x)}×${fmtVideoMetaCell(r.split_y)}`;
 }
 
-const VIDEO_TABLE_COLSPAN = 10;
+function videoMetaNumber(rec, field) {
+  const r = typeof rec === "object" && rec ? rec : {};
+  const v = r[field];
+  if (v == null || v === "") return null;
+  const n = Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * @param {unknown} a
+ * @param {unknown} b
+ * @param {string} key
+ * @param {"asc"|"desc"} dir
+ */
+function clipCountSortValue(videoPath) {
+  const v = gClipCountsForSort[videoPath];
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  return Infinity;
+}
+
+function compareVideoRows(a, b, key, dir) {
+  const mul = dir === "desc" ? -1 : 1;
+  const ra = typeof a === "object" && a ? a : {};
+  const rb = typeof b === "object" && b ? b : {};
+  const pa = videoRecordPath(a);
+  const pb = videoRecordPath(b);
+  let cmp = 0;
+  switch (key) {
+    case "name": {
+      const na = (pa.split(/[\\/]/).pop() || pa).toLowerCase();
+      const nb = (pb.split(/[\\/]/).pop() || pb).toLowerCase();
+      cmp = na.localeCompare(nb, undefined, { sensitivity: "base", numeric: true });
+      break;
+    }
+    case "snap": {
+      const ca = gSnapshotCountsForSort.counts[pa];
+      const cb = gSnapshotCountsForSort.counts[pb];
+      const ta = ca && ca.has_snapshot ? Number(ca.total) : null;
+      const tb = cb && cb.has_snapshot ? Number(cb.total) : null;
+      const sa = ta != null && Number.isFinite(ta) ? ta : -1;
+      const sb = tb != null && Number.isFinite(tb) ? tb : -1;
+      cmp = sa - sb;
+      if (cmp === 0) {
+        const c0a = ca && ca.has_snapshot ? Number(ca.class0) : -1;
+        const c0b = cb && cb.has_snapshot ? Number(cb.class0) : -1;
+        cmp = (Number.isFinite(c0a) ? c0a : -1) - (Number.isFinite(c0b) ? c0b : -1);
+      }
+      break;
+    }
+    case "disk_pixel":
+    case "disk_radius_mm":
+    case "frame_start":
+    case "frame_end":
+    case "fly_count": {
+      const na = videoMetaNumber(ra, key);
+      const nb = videoMetaNumber(rb, key);
+      cmp = (na ?? -Infinity) - (nb ?? -Infinity);
+      break;
+    }
+    case "split": {
+      const sa = videoRowSplitText(ra);
+      const sb = videoRowSplitText(rb);
+      cmp = sa.localeCompare(sb, undefined, { sensitivity: "base", numeric: true });
+      const xa = videoMetaNumber(ra, "split_x");
+      const xb = videoMetaNumber(rb, "split_x");
+      if (cmp === 0) cmp = (xa ?? -Infinity) - (xb ?? -Infinity);
+      if (cmp === 0) {
+        const ya = videoMetaNumber(ra, "split_y");
+        const yb = videoMetaNumber(rb, "split_y");
+        cmp = (ya ?? -Infinity) - (yb ?? -Infinity);
+      }
+      break;
+    }
+    case "clips": {
+      cmp = clipCountSortValue(pa) - clipCountSortValue(pb);
+      break;
+    }
+    default:
+      cmp = 0;
+  }
+  if (cmp !== 0) return mul * cmp;
+  return pa.localeCompare(pb);
+}
+
+function updateVideoSortHeaderIndicators() {
+  const table = document.querySelector(".video-table");
+  if (!table) return;
+  for (const th of table.querySelectorAll("thead th[data-video-sort]")) {
+    const dirEl = th.querySelector(".video-sort-dir");
+    if (!dirEl) continue;
+    const k = th.getAttribute("data-video-sort");
+    if (videoTableSort.key && k === videoTableSort.key) {
+      dirEl.textContent = videoTableSort.dir === "asc" ? " ▲" : " ▼";
+    } else {
+      dirEl.textContent = "";
+    }
+  }
+}
+
+const VIDEO_TABLE_COLSPAN = 11;
 
 function mkVideoNumTd(val) {
   const td = document.createElement("td");
@@ -443,6 +798,38 @@ function mkVideoNumTd(val) {
 }
 
 /** Snapshot class 0/1 counts cell (filled after /api/project/snapshot_label_counts). */
+/** Main video row: clip count (filled after /api/project/video_subclips). */
+function mkVideoClipsTdMainPlaceholder() {
+  const td = document.createElement("td");
+  td.className = "col-num-cell col-clips-cell";
+  td.textContent = "…";
+  td.title = "Number of saved clips for this video";
+  return td;
+}
+
+/** Subclip rows: count is only on the parent main row. */
+function mkVideoClipsTdSubclipDash() {
+  const td = document.createElement("td");
+  td.className = "col-num-cell col-clips-cell video-clips-cell-sub";
+  td.textContent = "—";
+  return td;
+}
+
+function setMainVideoRowClipsCell(mainTr, text) {
+  const td = mainTr && mainTr.querySelector("td.col-clips-cell");
+  if (td) td.textContent = text;
+  const path = mainTr && mainTr.dataset.videoPath;
+  if (!path) return;
+  if (text === "…") {
+    delete gClipCountsForSort[path];
+  } else if (text === "—") {
+    gClipCountsForSort[path] = null;
+  } else {
+    const n = parseInt(String(text), 10);
+    gClipCountsForSort[path] = Number.isFinite(n) ? n : null;
+  }
+}
+
 function mkVideoSnapTdPlaceholder() {
   const td = document.createElement("td");
   td.className = "col-num-cell video-snap-cell";
@@ -491,6 +878,7 @@ async function loadSnapshotLabelCounts(projectName) {
     if (selectedProject !== projectName) return;
     const counts = r.counts || {};
     const clipCounts = r.clip_counts || {};
+    gSnapshotCountsForSort = { counts, clip_counts: clipCounts };
     for (const row of videoList.querySelectorAll(
       "tr.video-row:not(.video-subclip-row)[data-video-path]",
     )) {
@@ -526,6 +914,107 @@ async function loadSnapshotLabelCounts(projectName) {
       td.title = "Could not load snapshot counts";
     }
   }
+}
+
+function fmtTrackingParam(v) {
+  if (v == null || v === "") return "—";
+  return String(v);
+}
+
+function setTrackingOpenDl(dlEl, rows) {
+  if (!dlEl) return;
+  dlEl.textContent = "";
+  for (const { label, value } of rows) {
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = fmtTrackingParam(value);
+    dlEl.appendChild(dt);
+    dlEl.appendChild(dd);
+  }
+}
+
+function closeTrackingOpenModal() {
+  if (!trackingOpenModal) return;
+  trackingOpenModal.classList.add("hidden");
+  trackingOpenPendingUrl = "";
+}
+
+/**
+ * Subclip “Tracking”: show all query/manifest parameters, then user opens Detect explorer.
+ */
+function openTrackingReviewModal({ trackingDir, videoPath, clip }) {
+  if (!trackingOpenModal || !trackingOpenModalParams) return;
+  const q2 = new URLSearchParams({
+    tracking_dir: String(trackingDir),
+    video_path: String(videoPath),
+  });
+  trackingOpenPendingUrl = `/detect_explore?${q2.toString()}`;
+  const origin = typeof window !== "undefined" && window.location && window.location.origin
+    ? window.location.origin
+    : "";
+  const absUrl = origin ? `${origin}${trackingOpenPendingUrl}` : trackingOpenPendingUrl;
+
+  const clipLabel =
+    clip && clip.name && String(clip.name).trim()
+      ? String(clip.name).trim()
+      : clip && clip.id != null
+        ? `Clip ${clip.id}`
+        : "—";
+
+  setTrackingOpenDl(trackingOpenModalParams, [
+    { label: "Project", value: selectedProject || "—" },
+    { label: "Parent video path", value: videoPath },
+    { label: "Subclip id", value: clip && clip.id != null ? String(clip.id) : "—" },
+    { label: "Subclip label", value: clipLabel },
+    {
+      label: "Subclip frame range (plot window)",
+      value:
+        clip && (clip.start != null || clip.end != null)
+          ? `${clip.start ?? "—"} … ${clip.end ?? "—"}`
+          : "—",
+    },
+    {
+      label: "Total-speed CSV (subclip)",
+      value: clip && clip.source_csv ? String(clip.source_csv) : "—",
+    },
+    { label: "Tracking output directory (tracking_dir)", value: trackingDir },
+    { label: "video_path (query)", value: videoPath },
+    { label: "Full URL to open", value: absUrl },
+  ]);
+
+  if (trackingOpenModalManifest) {
+    trackingOpenModalManifest.textContent = "Resolving paths from server (/api/tracking_explore/manifest)…";
+  }
+
+  trackingOpenModal.classList.remove("hidden");
+
+  const qsp = new URLSearchParams({ dir: String(trackingDir) });
+  qsp.set("video_path", String(videoPath));
+  fetch(`/api/tracking_explore/manifest?${qsp.toString()}`)
+    .then((resp) => resp.json().then((j) => ({ resp, j })))
+    .then(({ resp, j }) => {
+      if (!trackingOpenModal || trackingOpenModal.classList.contains("hidden")) return;
+      if (!trackingOpenModalManifest) return;
+      if (!resp.ok || j.error) {
+        trackingOpenModalManifest.textContent = `Manifest: ${j.error || `request failed (${resp.status})`}`;
+        return;
+      }
+      trackingOpenModalManifest.textContent = [
+        "Resolved by server (same assets Detect explorer will load):",
+        `  save_dir: ${j.save_dir || "—"}`,
+        `  video_path: ${j.video_path || "—"}`,
+        `  csv_abs_path: ${j.csv_abs_path || "—"}`,
+        `  json_abs_path: ${j.json_abs_path || "—"}`,
+        `  frame_min … frame_max: ${j.frame_min ?? "—"} … ${j.frame_max ?? "—"}`,
+      ].join("\n");
+    })
+    .catch((err) => {
+      if (!trackingOpenModalManifest || !trackingOpenModal || trackingOpenModal.classList.contains("hidden")) {
+        return;
+      }
+      trackingOpenModalManifest.textContent = `Manifest request failed: ${err.message || err}`;
+    });
 }
 
 function fillVideoActionsTd(tdAct, path, videoEntry, playbackOverride, resultsOpts) {
@@ -622,6 +1111,8 @@ function buildVideoSubclipRow(parentPath, videoEntry, clip) {
   subCb.dataset.parentPath = parentPath;
   subCb.dataset.clipId = String(clip.id);
   subCb.dataset.sourceCsv = clip.source_csv ? String(clip.source_csv) : "";
+  if (Number.isFinite(s0)) subCb.dataset.frameStart = String(Math.round(s0));
+  if (Number.isFinite(s1)) subCb.dataset.frameEnd = String(Math.round(s1));
   subCb.title = "Select subclip";
   subCb.addEventListener("change", updateSubclipSelectAllState);
   tdCb.appendChild(subCb);
@@ -649,14 +1140,18 @@ function buildVideoSubclipRow(parentPath, videoEntry, clip) {
   }
   if (clip.has_tracking && clip.tracking_output_dir) {
     metaDiv.appendChild(document.createTextNode(" · "));
-    const t = document.createElement("a");
-    const q2 = new URLSearchParams({
-      tracking_dir: String(clip.tracking_output_dir),
-      video_path: String(parentPath),
-    });
-    t.href = `/detect_explore?${q2.toString()}`;
+    const t = document.createElement("button");
+    t.type = "button";
     t.textContent = "Tracking";
     t.className = "video-subclip-plot-link";
+    t.title = "Review parameters, then open Detect explorer in a new tab";
+    t.onclick = () => {
+      openTrackingReviewModal({
+        trackingDir: String(clip.tracking_output_dir),
+        videoPath: String(parentPath),
+        clip,
+      });
+    };
     metaDiv.appendChild(t);
   }
   tdName.appendChild(metaDiv);
@@ -681,6 +1176,7 @@ function buildVideoSubclipRow(parentPath, videoEntry, clip) {
 
   tr.appendChild(tdCb);
   tr.appendChild(tdName);
+  tr.appendChild(mkVideoClipsTdSubclipDash());
   tr.appendChild(mkVideoSnapTdPlaceholder());
   tr.appendChild(mkVideoNumTd(recObj.disk_pixel));
   tr.appendChild(mkVideoNumTd(recObj.disk_radius_mm));
@@ -725,7 +1221,7 @@ function updateSubclipFoldIcon(mainTr) {
   const icon = mainTr.querySelector(".video-subclip-fold-icon");
   if (!icon) return;
   const collapsed = mainTr.classList.contains("video-subclips-collapsed");
-  icon.textContent = collapsed ? " ▶" : " ▼";
+  icon.textContent = collapsed ? "▶" : "▼";
 }
 
 function setSubclipsFolded(mainTr, folded) {
@@ -746,20 +1242,24 @@ function getMainRowsWithSubclips() {
 }
 
 function updateVideoColumnFoldHeaderState() {
-  if (!videoColHeader) return;
+  const foldBtn = videoFoldAllBtn;
+  const headerTh = videoColHeader;
+  if (!foldBtn || !headerTh) return;
   const mains = getMainRowsWithSubclips();
   if (!mains.length) {
-    videoColHeader.classList.remove("is-clickable");
-    videoColHeader.textContent = "Video";
-    videoColHeader.title = "Video";
+    headerTh.classList.remove("is-clickable");
+    foldBtn.classList.add("hidden");
+    foldBtn.disabled = true;
+    headerTh.title = "Click to sort by file name";
     return;
   }
+  headerTh.classList.add("is-clickable");
+  foldBtn.classList.remove("hidden");
+  foldBtn.disabled = false;
   const anyExpanded = mains.some((tr) => !tr.classList.contains("video-subclips-collapsed"));
-  videoColHeader.classList.add("is-clickable");
-  videoColHeader.textContent = anyExpanded ? "Video ▼" : "Video ▶";
-  videoColHeader.title = anyExpanded
-    ? "Click to fold all sub-clips"
-    : "Click to unfold all sub-clips";
+  foldBtn.textContent = anyExpanded ? "▼" : "▶";
+  foldBtn.title = anyExpanded ? "Fold all sub-clips" : "Unfold all sub-clips";
+  headerTh.title = "Click to sort by file name (use ▶/▼ to fold or unfold all sub-clips)";
 }
 
 function setAllSubclipsFolded(folded) {
@@ -779,7 +1279,7 @@ function toggleAllSubclipsFold() {
 function onMainVideoRowFoldClick(e) {
   const tr = e.currentTarget;
   if (!tr.classList.contains("video-has-subclips")) return;
-  if (e.target.closest("input, button, a, label")) return;
+  if (e.target.closest("input, button, a, label, .col-clips-cell")) return;
   toggleSubclipsFold(tr);
   updateVideoColumnFoldHeaderState();
 }
@@ -796,7 +1296,17 @@ function enableVideoSubclipFolding(mainTr, parentPath) {
     const icon = document.createElement("span");
     icon.className = "video-subclip-fold-icon";
     icon.setAttribute("aria-hidden", "true");
-    nameTd.appendChild(icon);
+    let inner = nameTd.querySelector(".video-name-cell-inner");
+    const nameText = nameTd.querySelector(".video-name-text");
+    if (!inner && nameText) {
+      inner = document.createElement("div");
+      inner.className = "video-name-cell-inner";
+      nameTd.insertBefore(inner, nameText);
+      inner.appendChild(nameText);
+    }
+    if (inner && nameText) inner.insertBefore(icon, nameText);
+    else if (nameText) nameTd.insertBefore(icon, nameText);
+    else nameTd.insertBefore(icon, nameTd.firstChild);
   }
 
   if (!mainTr.dataset.subclipFoldBound) {
@@ -821,6 +1331,7 @@ async function loadVideoSubclipsAfterMainRow(mainTr, parentPath, videoEntry) {
 
   if (!proj) {
     loadingTr.remove();
+    setMainVideoRowClipsCell(mainTr, "—");
     return;
   }
 
@@ -832,6 +1343,7 @@ async function loadVideoSubclipsAfterMainRow(mainTr, parentPath, videoEntry) {
     loadingTr.remove();
 
     if (!resp.ok || data.error) {
+      setMainVideoRowClipsCell(mainTr, "—");
       appendSubclipColspanRow(
         mainTr,
         "video-subclip-status-row",
@@ -843,6 +1355,7 @@ async function loadVideoSubclipsAfterMainRow(mainTr, parentPath, videoEntry) {
     }
 
     const clips = data.clips || [];
+    setMainVideoRowClipsCell(mainTr, String(clips.length));
     if (!clips.length) {
       updateSubclipSelectAllState();
       return;
@@ -858,6 +1371,7 @@ async function loadVideoSubclipsAfterMainRow(mainTr, parentPath, videoEntry) {
     updateSubclipSelectAllState();
   } catch (_e) {
     loadingTr.remove();
+    setMainVideoRowClipsCell(mainTr, "—");
     appendSubclipColspanRow(mainTr, "video-subclip-status-row", "Failed to load subclips.", "video-subclips-empty");
     updateSubclipSelectAllState();
   }
@@ -1084,20 +1598,46 @@ function collectSnapshotBatchItems() {
       video_path: vp,
       source_csv: src,
       clip_id: n,
+      frame_start: c.dataset.frameStart ? parseInt(c.dataset.frameStart, 10) : null,
+      frame_end: c.dataset.frameEnd ? parseInt(c.dataset.frameEnd, 10) : null,
     });
   }
   return items;
 }
 
+/** Checked main video rows only (for delete / operations that remove whole videos). */
+function collectSelectedMainVideoPaths() {
+  return [
+    ...new Set(
+      [...videoList.querySelectorAll(".video-select-cb:checked")]
+        .map((c) => c.dataset.path)
+        .filter(Boolean),
+    ),
+  ];
+}
+
 /** Parent video paths from checked main rows and checked subclip rows (deduped). */
 function collectSelectedVideoPathsUnion() {
-  const fromMain = [...videoList.querySelectorAll(".video-select-cb:checked")]
-    .map((c) => c.dataset.path)
-    .filter(Boolean);
+  const fromMain = collectSelectedMainVideoPaths();
   const fromSubclips = [...videoList.querySelectorAll(".video-subclip-select-cb:checked")]
     .map((c) => c.dataset.parentPath)
     .filter(Boolean);
   return [...new Set([...fromMain, ...fromSubclips])];
+}
+
+/** Checked subclip rows for delete (clip DB rows only; does not unregister parent videos). */
+function collectSelectedSubclipsForDelete() {
+  const out = [];
+  for (const c of videoList.querySelectorAll(".video-subclip-select-cb:checked")) {
+    const vp = c.dataset.parentPath;
+    const cid = c.dataset.clipId;
+    const src = (c.dataset.sourceCsv || "").trim();
+    if (!vp || !cid || !src) continue;
+    const n = parseInt(cid, 10);
+    if (!Number.isFinite(n)) continue;
+    out.push({ parentPath: vp, clipId: n, sourceCsv: src });
+  }
+  return out;
 }
 
 function resetBatchSelectHeaders() {
@@ -1291,6 +1831,107 @@ function renderProjectList() {
   }
 }
 
+async function renderRegisteredVideoRows(project, { preserveSelection = false } = {}) {
+  if (!project) return;
+  const projName = project.name || "";
+  if (gClipCountsForSortProject !== projName) {
+    gClipCountsForSort = Object.create(null);
+    gClipCountsForSortProject = projName;
+  }
+  const rawVideos = project.videos || [];
+  const selectedMain = new Set();
+  const selectedSubKeys = new Set();
+  if (preserveSelection && videoList) {
+    for (const c of videoList.querySelectorAll(".video-select-cb:checked")) {
+      if (c.dataset.path) selectedMain.add(c.dataset.path);
+    }
+    for (const c of videoList.querySelectorAll(".video-subclip-select-cb:checked")) {
+      const vp = c.dataset.parentPath;
+      const cid = c.dataset.clipId;
+      if (vp && cid) selectedSubKeys.add(`${vp}\t${cid}`);
+    }
+  }
+  videoList.innerHTML = "";
+  updateVideoColumnFoldHeaderState();
+  updateVideoSortHeaderIndicators();
+  const sorted = videoTableSort.key
+    ? [...rawVideos].sort((a, b) =>
+        compareVideoRows(a, b, videoTableSort.key, videoTableSort.dir),
+      )
+    : [...rawVideos];
+  const subPromises = [];
+  for (const v of sorted) {
+    const path = videoRecordPath(v);
+    const recObj = typeof v === "object" && v ? v : {};
+    const tr = document.createElement("tr");
+    tr.className = "video-row";
+    tr.title = path;
+
+    const tdCb = document.createElement("td");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "video-select-cb";
+    cb.dataset.path = path;
+    cb.addEventListener("change", updateVideoSelectAllState);
+    tdCb.appendChild(cb);
+
+    const tdName = document.createElement("td");
+    tdName.className = "col-name-cell";
+    const nameInner = document.createElement("div");
+    nameInner.className = "video-name-cell-inner";
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "video-name-text";
+    nameSpan.textContent = path.split(/[\\/]/).pop() || path;
+    nameInner.appendChild(nameSpan);
+    tdName.appendChild(nameInner);
+
+    const tdClips = mkVideoClipsTdMainPlaceholder();
+
+    const tdSnap = mkVideoSnapTdPlaceholder();
+
+    const tdSplit = document.createElement("td");
+    tdSplit.className = "col-split-cell";
+    tdSplit.textContent = videoRowSplitText(recObj);
+
+    const tdAct = document.createElement("td");
+    tdAct.className = "col-actions-cell";
+    fillVideoActionsTd(tdAct, path, v);
+
+    tr.dataset.videoPath = path;
+    tr.appendChild(tdCb);
+    tr.appendChild(tdName);
+    tr.appendChild(tdClips);
+    tr.appendChild(tdSnap);
+    tr.appendChild(mkVideoNumTd(recObj.disk_pixel));
+    tr.appendChild(mkVideoNumTd(recObj.disk_radius_mm));
+    tr.appendChild(mkVideoNumTd(recObj.frame_start));
+    tr.appendChild(mkVideoNumTd(recObj.frame_end));
+    tr.appendChild(mkVideoNumTd(recObj.fly_count));
+    tr.appendChild(tdSplit);
+    tr.appendChild(tdAct);
+    videoList.appendChild(tr);
+
+    subPromises.push(loadVideoSubclipsAfterMainRow(tr, path, v));
+  }
+  if (preserveSelection && selectedMain.size) {
+    for (const c of videoList.querySelectorAll(".video-select-cb")) {
+      if (c.dataset.path && selectedMain.has(c.dataset.path)) c.checked = true;
+    }
+  }
+  await Promise.all(subPromises);
+  if (preserveSelection && selectedSubKeys.size) {
+    for (const c of videoList.querySelectorAll(".video-subclip-select-cb")) {
+      const vp = c.dataset.parentPath;
+      const cid = c.dataset.clipId;
+      if (vp && cid && selectedSubKeys.has(`${vp}\t${cid}`)) c.checked = true;
+    }
+  }
+  updateVideoSelectAllState();
+  updateSubclipSelectAllState();
+  updateVideoColumnFoldHeaderState();
+  await loadSnapshotLabelCounts(project.name);
+}
+
 function renderProjectDetail(project) {
   cachedProjectDetail = project || null;
   if (!project) {
@@ -1305,6 +1946,7 @@ function renderProjectDetail(project) {
     resetBatchSelectHeaders();
     videoList.innerHTML = "";
     updateVideoColumnFoldHeaderState();
+    updateVideoSortHeaderIndicators();
     return;
   }
   detailTitle.textContent = `Project: ${project.name}`;
@@ -1320,63 +1962,13 @@ function renderProjectDetail(project) {
     resetBatchSelectHeaders();
     videoList.innerHTML = "";
     updateVideoColumnFoldHeaderState();
+    updateVideoSortHeaderIndicators();
   } else {
     videoBatchBar.classList.remove("hidden");
     videoTableWrap.classList.remove("hidden");
     videoListEmpty.classList.add("hidden");
     resetBatchSelectHeaders();
-    videoList.innerHTML = "";
-    updateVideoColumnFoldHeaderState();
-    const subPromises = [];
-    for (const v of videos) {
-      const path = videoRecordPath(v);
-      const recObj = typeof v === "object" && v ? v : {};
-      const tr = document.createElement("tr");
-      tr.className = "video-row";
-      tr.title = path;
-
-      const tdCb = document.createElement("td");
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.className = "video-select-cb";
-      cb.dataset.path = path;
-      cb.addEventListener("change", updateVideoSelectAllState);
-      tdCb.appendChild(cb);
-
-      const tdName = document.createElement("td");
-      tdName.className = "col-name-cell";
-      tdName.textContent = path.split(/[\\/]/).pop() || path;
-
-      const tdSnap = mkVideoSnapTdPlaceholder();
-
-      const tdSplit = document.createElement("td");
-      tdSplit.className = "col-split-cell";
-      tdSplit.textContent = videoRowSplitText(recObj);
-
-      const tdAct = document.createElement("td");
-      tdAct.className = "col-actions-cell";
-      fillVideoActionsTd(tdAct, path, v);
-
-      tr.dataset.videoPath = path;
-      tr.appendChild(tdCb);
-      tr.appendChild(tdName);
-      tr.appendChild(tdSnap);
-      tr.appendChild(mkVideoNumTd(recObj.disk_pixel));
-      tr.appendChild(mkVideoNumTd(recObj.disk_radius_mm));
-      tr.appendChild(mkVideoNumTd(recObj.frame_start));
-      tr.appendChild(mkVideoNumTd(recObj.frame_end));
-      tr.appendChild(mkVideoNumTd(recObj.fly_count));
-      tr.appendChild(tdSplit);
-      tr.appendChild(tdAct);
-      videoList.appendChild(tr);
-
-      subPromises.push(loadVideoSubclipsAfterMainRow(tr, path, v));
-    }
-    void (async () => {
-      await Promise.all(subPromises);
-      updateVideoColumnFoldHeaderState();
-      await loadSnapshotLabelCounts(project.name);
-    })();
+    void renderRegisteredVideoRows(project);
   }
 }
 
@@ -1506,6 +2098,9 @@ function closeVideoModal() {
 
 async function loadProjectDetail(name) {
   try {
+    if (!cachedProjectDetail || cachedProjectDetail.name !== name) {
+      videoTableSort = { key: null, dir: "asc" };
+    }
     const r = await req(`/api/project?name=${encodeURIComponent(name)}`);
     selectedProject = name;
     renderProjectList();
@@ -1637,11 +2232,33 @@ videoSelectAll.onchange = () => {
   videoSelectAll.indeterminate = false;
 };
 
-if (videoColHeader) {
-  videoColHeader.onclick = () => {
+if (videoFoldAllBtn) {
+  videoFoldAllBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
     toggleAllSubclipsFold();
-  };
+  });
 }
+(function bindRegisteredVideoTableSort() {
+  const thead = document.querySelector(".video-table thead");
+  if (!thead) return;
+  thead.addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-video-sort]");
+    if (!th) return;
+    if (e.target.closest("button, input, a, label")) return;
+    const key = th.getAttribute("data-video-sort");
+    if (!key) return;
+    const proj = cachedProjectDetail;
+    if (!proj || !(proj.videos || []).length) return;
+    if (videoTableSort.key === key) {
+      videoTableSort.dir = videoTableSort.dir === "asc" ? "desc" : "asc";
+    } else {
+      videoTableSort.key = key;
+      videoTableSort.dir = "asc";
+    }
+    updateVideoSortHeaderIndicators();
+    void renderRegisteredVideoRows(proj, { preserveSelection: true });
+  });
+})();
 updateVideoColumnFoldHeaderState();
 
 if (videoSubclipSelectAll) {
@@ -1662,24 +2279,52 @@ if (videoSubclipSelectAll) {
 
 batchDeleteVideosBtn.onclick = async () => {
   if (!selectedProject) return;
-  const paths = collectSelectedVideoPathsUnion();
-  if (!paths.length) {
+  const mainPaths = collectSelectedMainVideoPaths();
+  const subclips = collectSelectedSubclipsForDelete();
+  if (!mainPaths.length && !subclips.length) {
     setStatus("Select at least one video or subclip to delete.");
     return;
   }
+  const parts = [];
+  if (subclips.length) {
+    parts.push(
+      `delete ${subclips.length} saved subclip(s) (parent videos stay registered)`,
+    );
+  }
+  if (mainPaths.length) {
+    parts.push(`remove ${mainPaths.length} video(s) from the project`);
+  }
   const ok = window.confirm(
-    `Remove ${paths.length} video(s) from this project (including parents of selected subclips)? Files on disk are not deleted.`,
+    `${parts.join(" and ")}? Nothing is deleted from disk.`,
   );
   if (!ok) return;
   try {
-    const r = await req("/api/project/videos", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: selectedProject, video_paths: paths }),
-    });
+    let removedClips = 0;
+    for (const sc of subclips) {
+      const url = `/api/total_speed_clips/${encodeURIComponent(sc.clipId)}?path=${encodeURIComponent(sc.sourceCsv)}`;
+      const resp = await fetch(url, { method: "DELETE" });
+      const d = await resp.json().catch(() => ({}));
+      if (!resp.ok || d.error) {
+        throw new Error(d.error || `Could not delete subclip ${sc.clipId}`);
+      }
+      removedClips += 1;
+    }
+    let r;
+    if (mainPaths.length) {
+      r = await req("/api/project/videos", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: selectedProject, video_paths: mainPaths }),
+      });
+    } else {
+      r = { removed: 0, project: (await req(`/api/project?name=${encodeURIComponent(selectedProject)}`)).project };
+    }
     await refreshProjects();
     renderProjectDetail(r.project);
-    setStatus(`Removed ${r.removed} video(s) from project.`);
+    const bits = [];
+    if (removedClips) bits.push(`deleted ${removedClips} subclip(s)`);
+    if (mainPaths.length && r.removed != null) bits.push(`removed ${r.removed} video(s) from project`);
+    setStatus(bits.length ? bits.join(" · ") : "Done.");
   } catch (err) {
     setStatus(err.message);
   }
@@ -1726,9 +2371,13 @@ if (snapshotBatchBtn) {
 }
 
 if (trackingBatchBtn) {
-  trackingBatchBtn.onclick = async () => {
+  trackingBatchBtn.onclick = () => {
     if (!selectedProject) {
       setStatus("Select a project first.");
+      return;
+    }
+    if (!trackingBatchModal) {
+      setStatus("Tracking dialog is unavailable.");
       return;
     }
     const items = collectSnapshotBatchItems();
@@ -1737,31 +2386,37 @@ if (trackingBatchBtn) {
       setStatus("Select at least one video and/or subclip for tracking batch.");
       return;
     }
+    openTrackingBatchModal(items);
+  };
+}
 
+if (trackingBatchStartBtn) {
+  trackingBatchStartBtn.onclick = async () => {
+    if (!selectedProject) return;
     const runTrackingBatch = async (allowMissingInit) => {
       const resp = await fetch("/api/project/tracking_batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: selectedProject,
-          items,
-          use_snapshot_init: true,
-          allow_missing_init: !!allowMissingInit,
-        }),
+        body: JSON.stringify(collectTrackingBatchPayload(allowMissingInit)),
       });
       const data = await resp.json();
       return { resp, data };
     };
 
-    setStatus("Starting tracking batch (using snapshot labels when available)…");
+    if (trackingBatchModalStatus) {
+      trackingBatchModalStatus.textContent = "Starting tracking batch…";
+    } else {
+      setStatus("Starting tracking batch…");
+    }
     try {
-      let { resp, data } = await runTrackingBatch(false);
+      let { resp, data } = await runTrackingBatch(null);
       if (resp.status === 409 && data && data.missing_count) {
         const ok = window.confirm(
           `${data.missing_count} selected target(s) are missing snapshot labels for tracking start.\n\nContinue and fallback to model output for those targets?`,
         );
         if (!ok) {
-          setStatus("Tracking batch canceled.");
+          if (trackingBatchModalStatus) trackingBatchModalStatus.textContent = "Tracking batch canceled.";
+          else setStatus("Tracking batch canceled.");
           return;
         }
         ({ resp, data } = await runTrackingBatch(true));
@@ -1769,10 +2424,12 @@ if (trackingBatchBtn) {
       if (!resp.ok || data.error) {
         throw new Error(data.error || `Request failed: ${resp.status}`);
       }
+      closeTrackingBatchModal();
       const dest = data.quickrun_url || `/quickrun?session=${encodeURIComponent(data.session_id)}`;
       window.location.href = dest;
     } catch (err) {
-      setStatus(err.message || "Tracking batch failed.");
+      if (trackingBatchModalStatus) trackingBatchModalStatus.textContent = err.message || "Tracking batch failed.";
+      else setStatus(err.message || "Tracking batch failed.");
     }
   };
 }
@@ -1802,13 +2459,27 @@ if (quickRunResetDefaultsBtn) {
   quickRunResetDefaultsBtn.onclick = () => applyQuickRunDefaultsToForm();
 }
 
+if (trackingBatchResetDefaultsBtn) {
+  trackingBatchResetDefaultsBtn.onclick = () => applyTrackingBatchDefaultsToForm();
+}
+
 if (closeQuickRunModalBtn) {
   closeQuickRunModalBtn.onclick = closeQuickRunModal;
+}
+
+if (closeTrackingBatchModalBtn) {
+  closeTrackingBatchModalBtn.onclick = closeTrackingBatchModal;
 }
 
 if (quickRunModal) {
   quickRunModal.onclick = (e) => {
     if (e.target === quickRunModal) closeQuickRunModal();
+  };
+}
+
+if (trackingBatchModal) {
+  trackingBatchModal.onclick = (e) => {
+    if (e.target === trackingBatchModal) closeTrackingBatchModal();
   };
 }
 
@@ -1990,8 +2661,33 @@ metaSaveBtn.onclick = async () => {
     setMetaStatus(err.message || "Save failed.");
   }
 };
+if (closeTrackingOpenModalBtn) {
+  closeTrackingOpenModalBtn.onclick = closeTrackingOpenModal;
+}
+if (trackingOpenConfirmBtn) {
+  trackingOpenConfirmBtn.onclick = () => {
+    if (trackingOpenPendingUrl) {
+      window.open(trackingOpenPendingUrl, "_blank", "noopener");
+    }
+    closeTrackingOpenModal();
+  };
+}
+if (trackingOpenModal) {
+  trackingOpenModal.onclick = (e) => {
+    if (e.target === trackingOpenModal) closeTrackingOpenModal();
+  };
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  if (trackingOpenModal && !trackingOpenModal.classList.contains("hidden")) {
+    closeTrackingOpenModal();
+    return;
+  }
+  if (trackingBatchModal && !trackingBatchModal.classList.contains("hidden")) {
+    closeTrackingBatchModal();
+    return;
+  }
   if (projectMetaModal && !projectMetaModal.classList.contains("hidden")) {
     closeProjectMetaModal();
     return;

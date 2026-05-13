@@ -789,10 +789,24 @@ async function main() {
 
   try {
     const url = `/api/csv_table?path=${encodeURIComponent(filePath)}&max_rows=100000`;
-    const r = await fetch(url);
+    const gamUrl = `/api/total_speed_gam?path=${encodeURIComponent(filePath)}`;
+    const [r, gamR] = await Promise.all([fetch(url), fetch(gamUrl)]);
     const data = await r.json();
     if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
     if (!data.ok) throw new Error("Unexpected response");
+
+    let gamMeta = "";
+    let gamd = { ok: false };
+    try {
+      gamd = await gamR.json();
+      if (gamd.ok && Array.isArray(gamd.x) && Array.isArray(gamd.y_pred)) {
+        gamMeta = ` · GAM on ${esc(gamd.y_column || "y")} (${gamd.peak_x?.length || 0} peak(s))`;
+      } else if (gamd.error) {
+        gamMeta = ` · GAM: ${gamd.error}`;
+      }
+    } catch (_ge) {
+      gamMeta = " · GAM: could not load";
+    }
 
     const headers = data.headers || [];
     const rows = data.rows || [];
@@ -800,10 +814,35 @@ async function main() {
       throw new Error("CSV has no data to plot.");
     }
 
-    tspMeta.textContent = `${rows.length} row(s) · columns: ${headers.join(", ")}${data.truncated ? " · truncated" : ""}`;
+    tspMeta.textContent = `${rows.length} row(s) · columns: ${headers.join(", ")}${data.truncated ? " · truncated" : ""}${gamMeta}`;
 
     const colsOnce = pickSpeedColumns(headers);
     const { traces } = plotData(headers, rows);
+
+    if (gamd.ok && Array.isArray(gamd.x) && Array.isArray(gamd.y_pred) && gamd.x.length === gamd.y_pred.length) {
+      traces.push({
+        type: "scatter",
+        mode: "lines",
+        name: "GAM regression",
+        x: gamd.x,
+        y: gamd.y_pred,
+        line: { color: "#ffb347", width: 2, dash: "dash" },
+        hovertemplate: "%{x:.0f}<br>%{y:.4f}<extra></extra>",
+      });
+      const px = gamd.peak_x;
+      const py = gamd.peak_y;
+      if (Array.isArray(px) && Array.isArray(py) && px.length && px.length === py.length) {
+        traces.push({
+          type: "scatter",
+          mode: "markers",
+          name: "GAM peaks",
+          x: px,
+          y: py,
+          marker: { size: 11, color: "#ff5555", symbol: "diamond", line: { width: 1, color: "#fff" } },
+          hovertemplate: "%{x:.0f}<br>%{y:.4f}<extra></extra>",
+        });
+      }
+    }
 
     const xf = traces[0].x;
     const frameMin = Math.min(...xf);
@@ -816,7 +855,10 @@ async function main() {
       plot_bgcolor: "#151515",
       font: { color: "#ddd", size: 12 },
       title: {
-        text: "Total moving speed (from CSV)",
+        text:
+          gamd.ok && Array.isArray(gamd.x)
+            ? "Total moving speed (CSV + GAM regression & peaks)"
+            : "Total moving speed (from CSV)",
         font: { size: 15, color: "#eee" },
       },
       xaxis: {

@@ -16,12 +16,15 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -546,6 +549,11 @@ def index():
 @app.get("/quickrun")
 def quickrun_page():
     return send_from_directory(app.template_folder, "quickrun.html")
+
+
+@app.get("/gpu-monitor")
+def gpu_monitor_page():
+    return send_from_directory(app.template_folder, "gpu_monitor.html")
 
 
 @app.get("/csv-table")
@@ -1096,9 +1104,9 @@ def _resolve_snapshot_output_base(project: dict) -> Path:
     return p
 
 
-def _resolve_tracking_output_base(project: dict) -> Path:
+def _resolve_tracking_output_base(project: dict, override: Optional[str] = None) -> Path:
     """Where tracking batch outputs are saved (default: workdir/traking)."""
-    raw = str(project.get("tracking_output") or "").strip()
+    raw = str(override if override is not None else project.get("tracking_output") or "").strip()
     wdir = FASTVIEW_WORKDIR.resolve()
     if not raw:
         p = (wdir / "traking").resolve()
@@ -1222,15 +1230,28 @@ def _build_tracking_detect_cmd(entry: dict, pipeline_params: dict) -> List[str]:
         "--source", str(entry["path"]),
         "--conf-thres", str(pp["conf_thres"]),
         "--img-size", str(pp["img_size"]),
-        "--quiet",
-        "--tar-track",
-        "--tar-tr-start", str(entry["tracking_frame_start"]),
+    ]
+    dev = str(entry.get("tracking_device") or pp.get("device_s") or "").strip()
+    if dev:
+        cmd.extend(["--device", dev])
+    if pp.get("quiet", True):
+        cmd.append("--quiet")
+    if pp.get("tracking_detect_flags"):
+        cmd.append("--bh-count")
+        cmd.extend([
+            "--tar-track",
+            "--tar-tr-start",
+            str(entry.get("tracking_tar_tr_start", entry["tracking_frame_start"])),
+        ])
+        cmd.append("--head-bind")
+    cmd.extend([
         "--frame-start", str(entry["tracking_frame_start"]),
         "--project", str(pp["tracking_project_base"]),
         "--name", str(entry["tracking_run_name"]),
         "--tracking-dir", str(entry["tracking_save_dir"]),
-        "--exist-ok",
-    ]
+    ])
+    if pp.get("exist_ok", True):
+        cmd.append("--exist-ok")
     fe = entry.get("tracking_frame_end")
     if fe is not None:
         cmd.extend(["--frame-end", str(fe)])
@@ -1494,8 +1515,58 @@ def api_project_tracking_batch():
         imgsz = int(imgsz_raw) if imgsz_raw is not None and str(imgsz_raw).strip() != "" else 1280
     except (TypeError, ValueError):
         return jsonify({"error": "img_size must be an integer"}), 400
+    device_raw = data.get("device", "")
+    device_s, err = _quickrun_sanitize_arg_str(device_raw, "device")
+    if err:
+        return jsonify({"error": err}), 400
+    devices, err = _tracking_parse_devices(device_s or "")
+    if err:
+        return jsonify({"error": err}), 400
     use_snapshot_init = _quickrun_bool_param(data, "use_snapshot_init", True)
     allow_missing_init = _quickrun_bool_param(data, "allow_missing_init", False)
+    quiet = _quickrun_bool_param(data, "quiet", True)
+    exist_ok = _quickrun_bool_param(data, "exist_ok", True)
+    tracking_detect_flags = _quickrun_bool_param(data, "tracking_detect_flags", False)
+
+    def optional_positive_int(field: str) -> tuple[Optional[int], Optional[str]]:
+        raw = data.get(field)
+        if raw is None or str(raw).strip() == "":
+            return None, None
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return None, f"{field} must be an integer"
+        if n < 1:
+            return None, f"{field} must be >= 1"
+        return n, None
+
+    tar_tr_start_override, err = optional_positive_int("tar_tr_start_override")
+    if err:
+        return jsonify({"error": err}), 400
+    frame_start_override, err = optional_positive_int("frame_start_override")
+    if err:
+        return jsonify({"error": err}), 400
+    frame_end_override, err = optional_positive_int("frame_end_override")
+    if err:
+        return jsonify({"error": err}), 400
+    run_name_override, err = _quickrun_sanitize_arg_str(
+        data.get("run_name_override", ""),
+        "run_name_override",
+    )
+    if err:
+        return jsonify({"error": err}), 400
+    tracking_dir_override, err = _quickrun_sanitize_arg_str(
+        data.get("tracking_dir_override", ""),
+        "tracking_dir_override",
+    )
+    if err:
+        return jsonify({"error": err}), 400
+    init_label_path_override, err = _quickrun_sanitize_arg_str(
+        data.get("init_label_path_override", ""),
+        "init_label_path_override",
+    )
+    if err:
+        return jsonify({"error": err}), 400
 
     if not _is_valid_project_name(name):
         return jsonify({"error": "invalid project name"}), 400
@@ -1506,8 +1577,17 @@ def api_project_tracking_batch():
     project = next((p for p in projects if p["name"] == name), None)
     if not project:
         return jsonify({"error": "project not found"}), 404
+    tracking_output_raw = data.get("tracking_output")
+    tracking_output_override: Optional[str] = None
+    if tracking_output_raw is not None:
+        tracking_output_override, err = _quickrun_sanitize_arg_str(
+            tracking_output_raw,
+            "tracking_output",
+        )
+        if err:
+            return jsonify({"error": err}), 400
     try:
-        project_base = _resolve_tracking_output_base(project)
+        project_base = _resolve_tracking_output_base(project, tracking_output_override)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     if not (ROOT / "detect_2.py").is_file():
@@ -1601,22 +1681,73 @@ def api_project_tracking_batch():
 
     if not work_items:
         return jsonify({"error": "no valid tracking targets"}), 400
+    if (
+        len(work_items) != 1
+        and (
+            (run_name_override or "").strip()
+            or (tracking_dir_override or "").strip()
+            or (init_label_path_override or "").strip()
+        )
+    ):
+        return jsonify({
+            "error": (
+                "run_name_override, tracking_dir_override, and init_label_path_override "
+                "can only be used with one selected tracking target"
+            )
+        }), 400
+    resolved_init_label_override: Optional[str] = None
+    if init_label_path_override:
+        try:
+            init_p = _safe_path_any(init_label_path_override)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if init_p.suffix.lower() != ".txt":
+            return jsonify({"error": "init_label_path_override must be a .txt file"}), 400
+        if not init_p.is_file():
+            return jsonify({"error": "init_label_path_override does not exist"}), 400
+        resolved_init_label_override = str(init_p)
+    resolved_tracking_dir_override: Optional[str] = None
+    if tracking_dir_override:
+        try:
+            td_raw = Path(tracking_dir_override)
+            if td_raw.is_absolute():
+                td = td_raw.expanduser().resolve()
+            else:
+                td = (project_base / tracking_dir_override).resolve()
+        except OSError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if not any(str(td).startswith(str(b)) for b in ALLOWED_PATH_ROOTS):
+            return jsonify({"error": "tracking_dir_override is outside allowed roots"}), 400
+        resolved_tracking_dir_override = str(td)
 
     missing_init: List[dict] = []
     for wi in work_items:
         init_label: Optional[str] = None
-        if use_snapshot_init:
+        original_start = int(wi["frame_start"])
+        frame_start = int(frame_start_override) if frame_start_override is not None else original_start
+        tar_tr_start = int(tar_tr_start_override) if tar_tr_start_override is not None else frame_start
+        frame_end = int(frame_end_override) if frame_end_override is not None else wi.get("frame_end")
+        if frame_end is not None:
+            frame_end = int(frame_end)
+            if frame_end < frame_start:
+                return jsonify({"error": "frame_end_override must be >= frame_start"}), 400
+        wi["tracking_frame_start"] = frame_start
+        wi["tracking_tar_tr_start"] = tar_tr_start
+        wi["tracking_frame_end"] = frame_end
+        if resolved_init_label_override:
+            init_label = resolved_init_label_override
+        elif use_snapshot_init:
             init_label = _snapshot_init_label_for_tracking(
                 wi["video_path"],
                 name,
-                int(wi["frame_start"]),
+                frame_start,
                 int(wi["clip_id"]) if wi.get("kind") == "subclip" else None,
             )
             if not init_label:
                 item_desc = {
                     "kind": wi["kind"],
                     "video_path": wi["video_path"],
-                    "frame_start": int(wi["frame_start"]),
+                    "frame_start": frame_start,
                 }
                 if wi.get("clip_id") is not None:
                     item_desc["clip_id"] = int(wi["clip_id"])
@@ -1643,10 +1774,21 @@ def api_project_tracking_batch():
     pipeline_params = {
         "session_kind": "tracking",
         "weights": wpath,
+        "device_s": device_s or "",
+        "tracking_devices": devices,
         "conf_thres": conf_thres,
         "img_size": imgsz,
         "tracking_project_base": str(project_base),
         "rerun": rerun_tracking,
+        "quiet": quiet,
+        "exist_ok": exist_ok,
+        "tracking_detect_flags": tracking_detect_flags,
+        "tar_tr_start_override": tar_tr_start_override,
+        "frame_start_override": frame_start_override,
+        "frame_end_override": frame_end_override,
+        "run_name_override": run_name_override or "",
+        "tracking_dir_override": resolved_tracking_dir_override or "",
+        "init_label_path_override": resolved_init_label_override or "",
         "use_snapshot_init": use_snapshot_init,
     }
 
@@ -1654,11 +1796,14 @@ def api_project_tracking_batch():
     for i, wi in enumerate(work_items):
         vp = wi["video_path"]
         fname = Path(vp).name
-        fsn = int(wi["frame_start"])
-        fen = int(wi["frame_end"]) if wi.get("frame_end") is not None else None
+        fsn = int(wi["tracking_frame_start"])
+        tar_fsn = int(wi["tracking_tar_tr_start"])
+        fen = int(wi["tracking_frame_end"]) if wi.get("tracking_frame_end") is not None else None
         cid = int(wi["clip_id"]) if wi.get("kind") == "subclip" else None
-        run_name = _tracking_run_folder_name(vp, fsn, fen, cid)
-        save_dir = (project_base / run_name).resolve()
+        run_name = (run_name_override or "").strip() or _tracking_run_folder_name(vp, fsn, fen, cid)
+        save_dir = Path(resolved_tracking_dir_override).resolve() if resolved_tracking_dir_override else (project_base / run_name).resolve()
+        if not any(str(save_dir).startswith(str(b)) for b in ALLOWED_PATH_ROOTS):
+            return jsonify({"error": "tracking save directory is outside allowed roots"}), 400
         label = f"{fname} · clip {cid}" if cid is not None else fname
 
         ent_match = by_path.get(vp)
@@ -1666,6 +1811,7 @@ def api_project_tracking_batch():
         snap = _video_entry_snapshot(ent_match)
         snap["job_kind"] = "tracking"
         snap["tracking_frame_start"] = fsn
+        snap["tracking_tar_tr_start"] = tar_fsn
         snap["tracking_frame_end"] = fen
         snap["tracking_run_name"] = run_name
         snap["tracking_save_dir"] = str(save_dir)
@@ -2020,6 +2166,30 @@ def _quickrun_sanitize_arg_str(raw: object, field: str, max_len: int = 2048) -> 
     return s, None
 
 
+def _tracking_parse_devices(raw: str) -> tuple[List[str], Optional[str]]:
+    """
+    Parse optional --device string for tracking jobs.
+    Accepts values like '', '0', 'cpu', or '0,1,2'.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return [], None
+    out: List[str] = []
+    seen: set[str] = set()
+    for tok in s.split(","):
+        t = tok.strip()
+        if not t:
+            continue
+        if re.search(r"\s", t):
+            return [], "device values must not contain spaces"
+        if t not in seen:
+            out.append(t)
+            seen.add(t)
+    if not out:
+        return [], None
+    return out, None
+
+
 def _quickrun_int_param(q: dict, key: str, default: int, *, min_v: Optional[int] = None, max_v: Optional[int] = None) -> tuple[Optional[int], Optional[str]]:
     if key not in q:
         return default, None
@@ -2070,9 +2240,41 @@ def _parse_quick_run_pipeline_params(data: dict) -> tuple[Optional[dict], Option
     speed_window, err = _quickrun_int_param(data, "speed_window", 300, min_v=1, max_v=1_000_000)
     if err:
         return None, err
+    gam_splines, err = _quickrun_int_param(data, "gam_splines", 25, min_v=4, max_v=256)
+    if err:
+        return None, err
+    gam_grid_points, err = _quickrun_int_param(data, "gam_grid_points", 200, min_v=100, max_v=20_000)
+    if err:
+        return None, err
     frame_skip, err = _quickrun_int_param(data, "frame_skip", 30, min_v=1, max_v=1_000_000)
     if err:
         return None, err
+    # UI uses frames; convert to sampled-distance points for peak finding when frame-skip is used.
+    peak_min_distance_frames, err = _quickrun_int_param(
+        data,
+        "peak_min_distance_frames",
+        0,
+        min_v=0,
+        max_v=1_000_000,
+    )
+    if err:
+        return None, err
+    # Backward compatibility for older callers that still send points directly.
+    if "peak_min_distance_frames" not in data and "peak_min_distance_points" in data:
+        peak_min_distance_points, err = _quickrun_int_param(
+            data,
+            "peak_min_distance_points",
+            0,
+            min_v=0,
+            max_v=1_000_000,
+        )
+        if err:
+            return None, err
+    else:
+        if peak_min_distance_frames <= 0:
+            peak_min_distance_points = 0
+        else:
+            peak_min_distance_points = max(1, int(round(float(peak_min_distance_frames) / float(frame_skip))))
     imgsz, err = _quickrun_int_param(data, "imgsz", 640, min_v=32, max_v=8192)
     if err:
         return None, err
@@ -2083,6 +2285,33 @@ def _parse_quick_run_pipeline_params(data: dict) -> tuple[Optional[dict], Option
     if err:
         return None, err
     iou_thres, err = _quickrun_float_param(data, "iou_thres", 0.45, min_v=0.0, max_v=1.0)
+    if err:
+        return None, err
+    peak_prominence_factor, err = _quickrun_float_param(
+        data,
+        "peak_prominence_factor",
+        0.2,
+        min_v=0.001,
+        max_v=1000.0,
+    )
+    if err:
+        return None, err
+    auto_clip_duration_min, err = _quickrun_float_param(
+        data,
+        "auto_clip_duration_min",
+        10.0,
+        min_v=0.05,
+        max_v=10_000.0,
+    )
+    if err:
+        return None, err
+    auto_clip_fps, err = _quickrun_float_param(
+        data,
+        "auto_clip_fps",
+        30.0,
+        min_v=1.0,
+        max_v=1_000.0,
+    )
     if err:
         return None, err
 
@@ -2111,6 +2340,13 @@ def _parse_quick_run_pipeline_params(data: dict) -> tuple[Optional[dict], Option
         "workers": workers,
         "window_overlap": window_overlap,
         "speed_window": speed_window,
+        "gam_splines": gam_splines,
+        "gam_grid_points": gam_grid_points,
+        "peak_prominence_factor": peak_prominence_factor,
+        "peak_min_distance_frames": peak_min_distance_frames,
+        "peak_min_distance_points": peak_min_distance_points,
+        "auto_clip_duration_min": auto_clip_duration_min,
+        "auto_clip_fps": auto_clip_fps,
         "frame_skip": frame_skip,
         "imgsz": imgsz,
         "limit_n": limit_n,
@@ -2267,6 +2503,243 @@ def _quickrun_compute_outputs(video_abs: str, p: dict) -> dict:
     except Exception:
         pass
     return out
+
+
+def _total_speed_gam_sidecar_path(csv_path: Path) -> Path:
+    """JSON sidecar written next to ``*.total_speed.csv`` (replaces the ``.csv`` suffix)."""
+    return csv_path.with_suffix(".gam.json")
+
+
+def _total_speed_gam_fit_payload(
+    csv_path: Path,
+    *,
+    force_recompute: bool = False,
+    n_splines: int = 25,
+    grid_points: int = 200,
+    peak_prominence_factor: float = 0.2,
+    peak_min_distance_points: int = 0,
+) -> Tuple[Optional[dict], Optional[str]]:
+    """
+    Fit LinearGAM on frame vs speed (prefers speed_smooth), find peaks on the smooth prediction,
+    and cache results in ``<csv>.gam.json``. Returns (payload, error_message).
+    QuickRun can pass tuning knobs; API defaults keep previous behavior.
+    """
+    try:
+        csv_path = csv_path.resolve()
+    except OSError as exc:
+        return None, str(exc)
+    if not csv_path.is_file():
+        return None, "total_speed CSV not found on disk"
+
+    sidecar = _total_speed_gam_sidecar_path(csv_path)
+    n_splines = max(4, min(int(n_splines), 256))
+    grid_points = max(100, min(int(grid_points), 20_000))
+    peak_prominence_factor = max(0.001, min(float(peak_prominence_factor), 1000.0))
+    peak_min_distance_points = max(0, int(peak_min_distance_points))
+
+    if not force_recompute and sidecar.is_file():
+        try:
+            if sidecar.stat().st_mtime + 0.5 >= csv_path.stat().st_mtime:
+                data = json.loads(sidecar.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and int(data.get("version") or 0) == 2:
+                    return data, None
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    try:
+        import numpy as np
+        import pandas as pd
+        from pygam import LinearGAM
+        from scipy.signal import find_peaks
+    except ImportError as exc:
+        return None, f"GAM dependencies missing: {exc}"
+
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as exc:
+        return None, f"could not read CSV: {exc}"
+
+    if df.empty or len(df.columns) < 2:
+        return None, "CSV is empty or has too few columns"
+
+    norm_map = {str(c).strip().lower().replace(" ", "_"): c for c in df.columns}
+    frame_key = next(
+        (norm_map[k] for k in ("frame", "frames") if k in norm_map),
+        None,
+    )
+    if not frame_key:
+        frame_key = df.columns[0]
+    y_key = None
+    for cand in ("speed_smooth", "speedsmooth", "speed"):
+        if cand in norm_map:
+            y_key = norm_map[cand]
+            break
+    if not y_key:
+        return None, "no speed or speed_smooth column found"
+
+    work = df[[frame_key, y_key]].copy()
+    work.columns = ["_frame", "_y"]
+    work["_frame"] = pd.to_numeric(work["_frame"], errors="coerce")
+    work["_y"] = pd.to_numeric(work["_y"], errors="coerce")
+    work = work.dropna(subset=["_frame", "_y"])
+    if len(work) < 30:
+        return None, f"not enough numeric rows for GAM (have {len(work)}, need >= 30)"
+
+    work = work.sort_values("_frame").reset_index(drop=True)
+    if len(work) > 50_000:
+        step = int(np.ceil(len(work) / 40_000))
+        work = work.iloc[::step].reset_index(drop=True)
+
+    x_raw = work["_frame"].to_numpy(dtype=float)
+    y_raw = work["_y"].to_numpy(dtype=float)
+    mask = np.isfinite(x_raw) & np.isfinite(y_raw)
+    x_raw = x_raw[mask]
+    y_raw = y_raw[mask]
+    if len(y_raw) < 30:
+        return None, "not enough finite samples after filtering"
+
+    X = x_raw.reshape(-1, 1)
+    n_sp = int(max(4, min(n_splines, max(len(y_raw) // 4, 8))))
+    try:
+        gam = LinearGAM(n_splines=n_sp).gridsearch(X, y_raw)
+    except Exception as exc:
+        return None, f"GAM fit failed: {exc}"
+
+    try:
+        XX = gam.generate_X_grid(term=0, n=grid_points)
+        pred = np.asarray(gam.predict(XX), dtype=float).ravel()
+    except Exception as exc:
+        return None, f"GAM prediction failed: {exc}"
+
+    pred_std = float(np.nanstd(pred))
+    prom = pred_std * peak_prominence_factor if pred_std > 0 else float(
+        (float(np.nanmax(pred)) - float(np.nanmin(pred))) * 0.05 + 1e-9,
+    )
+    distance = max(5, peak_min_distance_points if peak_min_distance_points > 0 else len(XX) // 40)
+    peaks, _props = find_peaks(pred, prominence=prom, distance=distance)
+    xs = np.asarray(XX[:, 0], dtype=float).ravel()
+
+    out: dict[str, Any] = {
+        "version": 2,
+        "source_csv": str(csv_path),
+        "x": [float(v) for v in xs],
+        "y_pred": [float(v) for v in pred],
+        "peak_x": [float(xs[i]) for i in peaks],
+        "peak_y": [float(pred[i]) for i in peaks],
+        "y_column": y_key,
+        "n_splines": int(n_sp),
+        "grid_points": int(grid_points),
+        "peak_prominence_factor": float(peak_prominence_factor),
+        "peak_min_distance_points": int(distance),
+        "generated_at": _utc_now_iso(),
+    }
+    try:
+        sidecar.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    except OSError as exc:
+        return None, f"could not write sidecar: {exc}"
+    return out, None
+
+
+def _replace_auto_peak_clips_for_csv(
+    csv_path: Path,
+    peak_frames: List[float],
+    *,
+    frame_min: float,
+    frame_max: float,
+    duration_minutes: float,
+    fps: float,
+) -> int:
+    """
+    Replace auto-generated peak clips for this CSV.
+
+    Manual clips are preserved; only names that start with ``AutoPeak `` are removed.
+    """
+    canon = _total_speed_clips_csv_canonical(str(csv_path))
+    existing = _total_speed_clips_fetch_all(canon)
+    auto_ids = [int(c["id"]) for c in existing if str(c.get("name") or "").startswith("AutoPeak ")]
+    for cid in auto_ids:
+        _total_speed_clips_delete(canon, cid)
+
+    if not peak_frames:
+        return 0
+    try:
+        x_min = float(frame_min)
+        x_max = float(frame_max)
+    except (TypeError, ValueError):
+        return 0
+    if not (x_max > x_min):
+        return 0
+    fps = max(1.0, float(fps))
+    clip_len = max(1.0, float(duration_minutes) * 60.0 * fps)
+    half = clip_len / 2.0
+    created = 0
+    for i, px in enumerate(peak_frames, start=1):
+        try:
+            center = float(px)
+        except (TypeError, ValueError):
+            continue
+        start = center - half
+        end = center + half
+        if start < x_min:
+            end = min(x_max, end + (x_min - start))
+            start = x_min
+        if end > x_max:
+            start = max(x_min, start - (end - x_max))
+            end = x_max
+        if end - start < 1.0:
+            continue
+        name = f"AutoPeak {i:02d} @ {int(round(center))}"
+        _total_speed_clips_insert(canon, name, float(start), float(end), (i - 1) % 5)
+        created += 1
+    return created
+
+
+def _quickrun_attach_total_speed_gam_outputs(outputs: dict, params: Optional[dict] = None) -> None:
+    """After FastView produces ``total_speed_csv``, fit GAM + peaks and optionally auto-create subclips."""
+    raw = outputs.get("total_speed_csv")
+    if not raw:
+        return
+    try:
+        p = Path(str(raw)).expanduser().resolve()
+    except OSError:
+        outputs["total_speed_gam_error"] = "invalid total_speed_csv path"
+        return
+    if not p.is_file():
+        return
+    cfg = params or {}
+    payload, err = _total_speed_gam_fit_payload(
+        p,
+        force_recompute=False,
+        n_splines=int(cfg.get("gam_splines", 25)),
+        grid_points=int(cfg.get("gam_grid_points", 200)),
+        peak_prominence_factor=float(cfg.get("peak_prominence_factor", 0.2)),
+        peak_min_distance_points=int(cfg.get("peak_min_distance_points", 0)),
+    )
+    if err:
+        outputs["total_speed_gam_error"] = err
+        outputs["total_speed_gam_json"] = None
+        outputs["auto_peak_subclips_created"] = 0
+        return
+    assert payload is not None
+    outputs["total_speed_gam_error"] = None
+    outputs["total_speed_gam_json"] = str(_total_speed_gam_sidecar_path(p))
+    try:
+        created = _replace_auto_peak_clips_for_csv(
+            p,
+            [float(x) for x in (payload.get("peak_x") or [])],
+            frame_min=float(min(payload.get("x") or [0.0])),
+            frame_max=float(max(payload.get("x") or [0.0])),
+            duration_minutes=float(cfg.get("auto_clip_duration_min", 10.0)),
+            fps=float(cfg.get("auto_clip_fps", 30.0)),
+        )
+        outputs["auto_peak_subclips_created"] = int(created)
+    except Exception as exc:
+        outputs["auto_peak_subclips_created"] = 0
+        outputs["total_speed_gam_error"] = (
+            f"{outputs['total_speed_gam_error']} | auto subclips: {exc}"
+            if outputs.get("total_speed_gam_error")
+            else f"auto subclips: {exc}"
+        )
 
 
 def _quickrun_ensure_db() -> None:
@@ -3081,6 +3554,240 @@ def _quickrun_list_history(limit: int = 50) -> List[dict]:
     return out
 
 
+def _quickrun_list_processing_jobs() -> List[dict]:
+    """Currently running quickrun jobs (rows with status=processing and PID)."""
+    _quickrun_ensure_db()
+    with _QUICKRUN_SESSION_LOCK:
+        conn = sqlite3.connect(str(QUICKRUN_DB_PATH), timeout=60.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            rows = conn.execute(
+                """
+                SELECT j.session_id, j.job_key, j.video_label, j.video_path, j.pid,
+                       j.started_at, j.log_path,
+                       s.project, s.pipeline_params_json,
+                       j.entry_snapshot_json
+                FROM quickrun_jobs j
+                JOIN quickrun_sessions s ON s.id = j.session_id
+                WHERE j.status = 'processing' AND j.pid IS NOT NULL
+                ORDER BY j.started_at ASC
+                """,
+            ).fetchall()
+        finally:
+            conn.close()
+    out: List[dict] = []
+    for r in rows:
+        try:
+            pp = json.loads(r["pipeline_params_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            pp = {}
+        try:
+            snap = json.loads(r["entry_snapshot_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            snap = {}
+        pid = int(r["pid"])
+        out.append({
+            "session_id": str(r["session_id"]),
+            "job_id": str(r["job_key"]),
+            "project": str(r["project"] or ""),
+            "video_label": str(r["video_label"] or ""),
+            "video_path": str(r["video_path"] or ""),
+            "pid": pid,
+            "started_at": r["started_at"],
+            "log_path": str(r["log_path"] or ""),
+            "session_kind": str(pp.get("session_kind") or "fastview"),
+            "job_kind": str(snap.get("job_kind") or "fastview"),
+            "tracking_device": str(snap.get("tracking_device") or pp.get("device_s") or ""),
+            "killable": str(snap.get("job_kind") or "fastview") in ("tracking", "snapshot"),
+        })
+    return out
+
+
+def _nvidia_smi_csv_query(fields: str) -> tuple[List[List[str]], Optional[str]]:
+    cmd = [
+        "nvidia-smi",
+        f"--query-gpu={fields}",
+        "--format=csv,noheader,nounits",
+    ]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return [], "nvidia-smi not found"
+    if p.returncode != 0:
+        err = (p.stderr or p.stdout or "").strip() or f"nvidia-smi exited with {p.returncode}"
+        return [], err
+    out: List[List[str]] = []
+    for ln in (p.stdout or "").splitlines():
+        t = ln.strip()
+        if not t:
+            continue
+        out.append([c.strip() for c in next(csv.reader([t]))])
+    return out, None
+
+
+def _nvidia_smi_process_query() -> tuple[List[List[str]], Optional[str]]:
+    cmd = [
+        "nvidia-smi",
+        "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+        "--format=csv,noheader,nounits",
+    ]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return [], "nvidia-smi not found"
+    out_text = f"{p.stdout}\n{p.stderr}".lower()
+    if p.returncode != 0 and "no running processes found" not in out_text:
+        err = (p.stderr or p.stdout or "").strip() or f"nvidia-smi exited with {p.returncode}"
+        return [], err
+    out: List[List[str]] = []
+    for ln in (p.stdout or "").splitlines():
+        t = ln.strip()
+        if not t or "no running processes found" in t.lower():
+            continue
+        out.append([c.strip() for c in next(csv.reader([t]))])
+    return out, None
+
+
+def _gpu_monitor_payload() -> dict:
+    g_rows, g_err = _nvidia_smi_csv_query(
+        "index,uuid,name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+    )
+    p_rows, p_err = _nvidia_smi_process_query()
+    jobs = _quickrun_list_processing_jobs()
+    jobs_by_pid = {int(j["pid"]): j for j in jobs if j.get("pid") is not None}
+
+    gpus: List[dict] = []
+    by_uuid: Dict[str, dict] = {}
+    for r in g_rows:
+        if len(r) < 7:
+            continue
+        rec = {
+            "index": r[0],
+            "uuid": r[1],
+            "name": r[2],
+            "util_gpu": r[3],
+            "mem_used_mb": r[4],
+            "mem_total_mb": r[5],
+            "temp_c": r[6],
+            "processes": [],
+        }
+        gpus.append(rec)
+        by_uuid[str(r[1])] = rec
+
+    for r in p_rows:
+        if len(r) < 4:
+            continue
+        gpu_uuid = str(r[0])
+        try:
+            pid = int(r[1])
+        except (TypeError, ValueError):
+            continue
+        proc = {
+            "pid": pid,
+            "process_name": r[2],
+            "used_memory_mb": r[3],
+            "job": jobs_by_pid.get(pid),
+        }
+        if gpu_uuid in by_uuid:
+            by_uuid[gpu_uuid]["processes"].append(proc)
+
+    jobs_unmapped = [j for j in jobs if int(j["pid"]) not in {p["pid"] for g in gpus for p in g["processes"]}]
+    return {
+        "ok": True,
+        "nvidia_smi_error": g_err,
+        "nvidia_process_error": p_err,
+        "gpus": gpus,
+        "running_jobs_unmapped": jobs_unmapped,
+        "updated_at": _utc_now_iso(),
+    }
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _quickrun_kill_job(session_id: str, job_id: str) -> tuple[bool, str]:
+    sess = _load_quickrun_session(session_id)
+    if sess is None:
+        return False, "session not found"
+    job = next((j for j in sess["jobs"] if str(j["id"]) == str(job_id)), None)
+    if job is None:
+        return False, "job not found"
+    kind = str((job.get("entry_snapshot") or {}).get("job_kind") or "fastview")
+    if kind not in ("tracking", "snapshot"):
+        return False, "only detect_2 jobs can be killed from GPU monitor"
+
+    if job["status"] != "processing":
+        return False, f"job is not running (status={job['status']})"
+
+    pid = int(job["pid"]) if job.get("pid") is not None else None
+    if pid is not None:
+        ok, emsg = _kill_pid_best_effort(pid)
+        if not ok:
+            return False, emsg or "failed to terminate process"
+
+    job["status"] = "failed"
+    job["pid"] = None
+    job["finished_at"] = _utc_now_iso()
+    job["exit_code"] = -15
+    msg = "Killed by user from GPU monitor."
+    if job.get("error_message"):
+        job["error_message"] = f"{job['error_message']} | {msg}"
+    else:
+        job["error_message"] = msg
+    try:
+        tail = _read_log_tail(Path(job["log_path"]), 80)
+    except Exception:
+        tail = ""
+    job["log_tail"] = tail
+    _save_quickrun_session(sess)
+    return True, "killed"
+
+
+def _kill_pid_best_effort(pid: int) -> tuple[bool, Optional[str]]:
+    """Try process-group kill first, then direct PID kill."""
+    if pid <= 0:
+        return False, "invalid pid"
+    term_err: Optional[str] = None
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except Exception as exc:
+        term_err = str(exc)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception as exc2:
+            term_err = f"{term_err}; {exc2}"
+    time.sleep(0.15)
+    if not _pid_alive(pid):
+        return True, None
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception as exc:
+            return False, f"failed to kill pid {pid}: {exc}"
+    time.sleep(0.1)
+    if _pid_alive(pid):
+        return False, term_err or f"pid {pid} is still alive"
+    return True, None
+
+
 def _quickrun_insert_session(sess: dict) -> None:
     """Persist a new session and all jobs (initial QuickRun submit)."""
     _quickrun_ensure_db()
@@ -3300,11 +4007,14 @@ def _quickrun_fastview_detection_csv_exists(video_abs: str, params: dict) -> boo
 def _quickrun_tracking_outputs_exist(entry: dict, params: dict) -> bool:
     """True if tracking output folder has at least one JSON artifact."""
     try:
-        base = Path(params["tracking_project_base"])
-        run_name = str(entry.get("tracking_run_name") or "").strip()
-        if not run_name:
-            return False
-        save_dir = (base / run_name).resolve()
+        if entry.get("tracking_save_dir"):
+            save_dir = Path(str(entry["tracking_save_dir"])).resolve()
+        else:
+            base = Path(params["tracking_project_base"])
+            run_name = str(entry.get("tracking_run_name") or "").strip()
+            if not run_name:
+                return False
+            save_dir = (base / run_name).resolve()
     except (TypeError, OSError, ValueError):
         return False
     if not save_dir.is_dir():
@@ -3405,6 +4115,149 @@ def _quickrun_fill_job_outputs_done(
             job["outputs"],
             ent,
         )
+        _quickrun_attach_total_speed_gam_outputs(job["outputs"], sess.get("pipeline_params"))
+
+
+def _quickrun_run_tracking_session_worker_parallel(sid: str) -> None:
+    """
+    Multi-device tracking worker: one active job per configured device.
+    As soon as a job finishes on one device, the next queued job starts on that device.
+    """
+    active: Dict[int, tuple[subprocess.Popen, Any, str]] = {}
+    while True:
+        sess = _load_quickrun_session(sid)
+        if sess is None:
+            for _idx, (proc, log_f, _dev) in list(active.items()):
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    log_f.close()
+                except Exception:
+                    pass
+            return
+
+        params = sess["pipeline_params"]
+        devices_raw = params.get("tracking_devices") or []
+        devices = [str(x).strip() for x in devices_raw if str(x).strip()]
+        if not devices:
+            devices = [str(params.get("device_s") or "").strip()]
+        if not devices:
+            devices = [""]
+
+        used = {dev for _idx, (_proc, _lf, dev) in active.items()}
+        free_devices = [d for d in devices if d not in used]
+
+        for dev in free_devices:
+            idx: Optional[int] = None
+            for i, job0 in enumerate(sess["jobs"]):
+                if job0["status"] == "queued":
+                    idx = i
+                    break
+            if idx is None:
+                break
+
+            job = sess["jobs"][idx]
+            job["status"] = "processing"
+            job["started_at"] = _utc_now_iso()
+            job["error_message"] = None
+            job["exit_code"] = None
+            job["log_tail"] = ""
+            job["outputs"] = None
+            entry = job["entry_snapshot"]
+            entry["tracking_device"] = dev
+            _save_quickrun_session(sess)
+
+            skip_existing = (
+                not params.get("rerun")
+                and _quickrun_job_outputs_already_exist(sess, job)
+            )
+            if skip_existing:
+                msg = (
+                    "Skipped: outputs already exist on disk for this job. "
+                    "Enable “Rerun even if outputs exist” in QuickRun to force a fresh run.\n"
+                )
+                try:
+                    Path(job["log_path"]).write_text(msg, encoding="utf-8")
+                except OSError:
+                    pass
+                job["pid"] = None
+                job["finished_at"] = _utc_now_iso()
+                job["exit_code"] = 0
+                job["error_message"] = None
+                job["log_tail"] = msg.strip()
+                job["status"] = "done"
+                _quickrun_fill_job_outputs_done(sess, sid, job, skipped_existing=True)
+                _save_quickrun_session(sess)
+                continue
+
+            cmd = _build_tracking_detect_cmd(entry, params)
+            log_path = Path(job["log_path"])
+            try:
+                log_f = log_path.open("w", encoding="utf-8")
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(FASTVIEW_WORKDIR.resolve()),
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                job["pid"] = proc.pid
+                _save_quickrun_session(sess)
+                active[idx] = (proc, log_f, dev)
+            except Exception as exc:
+                try:
+                    log_f.close()  # type: ignore[name-defined]
+                except Exception:
+                    pass
+                job["pid"] = None
+                job["finished_at"] = _utc_now_iso()
+                job["exit_code"] = -1
+                job["error_message"] = str(exc)
+                job["status"] = "failed"
+                _save_quickrun_session(sess)
+
+        finished_any = False
+        for idx, (proc, log_f, _dev) in list(active.items()):
+            rc = proc.poll()
+            if rc is None:
+                continue
+            finished_any = True
+            try:
+                log_f.close()
+            except Exception:
+                pass
+            active.pop(idx, None)
+            sess_done = _load_quickrun_session(sid)
+            if sess_done is None:
+                return
+            job = sess_done["jobs"][idx]
+            job["pid"] = None
+            job["finished_at"] = _utc_now_iso()
+            job["exit_code"] = rc
+            job["log_tail"] = _read_log_tail(Path(job["log_path"]), 80)
+            if rc == 0 and not job.get("error_message"):
+                job["status"] = "done"
+                _quickrun_fill_job_outputs_done(sess_done, sid, job, skipped_existing=False)
+            else:
+                job["status"] = "failed"
+                if not job.get("error_message"):
+                    job["error_message"] = f"pipeline exited with code {rc}"
+            _save_quickrun_session(sess_done)
+
+        sess_end = _load_quickrun_session(sid)
+        if sess_end is None:
+            return
+        has_queued = any(j["status"] == "queued" for j in sess_end["jobs"])
+        if not has_queued and not active:
+            sess_end["session_status"] = "complete"
+            sess_end["finished_at"] = _utc_now_iso()
+            _save_quickrun_session(sess_end)
+            return
+
+        if not finished_any:
+            time.sleep(0.25)
 
 
 def _quickrun_run_session_worker(sid: str) -> None:
@@ -3420,6 +4273,16 @@ def _quickrun_run_session_worker(sid: str) -> None:
         script_chk = ROOT / "FastView" / "fastview_pipeline.py"
         if not script_chk.is_file():
             _quickrun_fail_session(sess0, "FastView/fastview_pipeline.py not found")
+            return
+
+    if sk == "tracking":
+        devs = [
+            str(x).strip()
+            for x in (sess0["pipeline_params"].get("tracking_devices") or [])
+            if str(x).strip()
+        ]
+        if len(devs) > 1:
+            _quickrun_run_tracking_session_worker_parallel(sid)
             return
 
     script = ROOT / "FastView" / "fastview_pipeline.py"
@@ -3646,6 +4509,57 @@ def api_quickrun_get_session(sid: str):
         "failed": failed,
     }
     return jsonify({"ok": True, "session": payload})
+
+
+@app.get("/api/gpu/monitor")
+def api_gpu_monitor():
+    return jsonify(_gpu_monitor_payload())
+
+
+@app.post("/api/gpu/kill_pid")
+def api_gpu_kill_pid():
+    data = request.get_json(force=True)
+    raw_pid = data.get("pid")
+    try:
+        pid = int(raw_pid)
+    except (TypeError, ValueError):
+        return jsonify({"error": "pid must be an integer"}), 400
+    if pid <= 0:
+        return jsonify({"error": "pid must be > 0"}), 400
+
+    proc_rows, err = _nvidia_smi_process_query()
+    if err and "no running processes found" not in str(err).lower():
+        return jsonify({"error": err}), 400
+    gpu_pids: set[int] = set()
+    for r in proc_rows:
+        if len(r) < 2:
+            continue
+        try:
+            gpu_pids.add(int(r[1]))
+        except (TypeError, ValueError):
+            continue
+    if pid not in gpu_pids:
+        return jsonify({"error": "pid is not a current GPU compute process"}), 400
+
+    ok, msg = _kill_pid_best_effort(pid)
+    if not ok:
+        return jsonify({"error": msg or "failed to kill pid"}), 400
+    return jsonify({"ok": True, "message": "killed", "pid": pid})
+
+
+@app.post("/api/quickrun/kill_job")
+def api_quickrun_kill_job():
+    data = request.get_json(force=True)
+    sid = str(data.get("session_id", "")).strip()
+    job_id = str(data.get("job_id", "")).strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", sid):
+        return jsonify({"error": "invalid session id"}), 400
+    if not job_id:
+        return jsonify({"error": "job_id is required"}), 400
+    ok, msg = _quickrun_kill_job(sid, job_id)
+    if not ok:
+        return jsonify({"error": msg}), 400
+    return jsonify({"ok": True, "message": msg})
 
 
 @app.get("/api/quickrun/history")
@@ -4348,6 +5262,28 @@ def api_csv_table():
         "row_count_returned": len(rows_out),
         "max_rows": max_body_rows,
     })
+
+
+@app.get("/api/total_speed_gam")
+def api_total_speed_gam():
+    """LinearGAM smooth + peak markers for a total_speed CSV (uses ``<csv>.gam.json`` cache)."""
+    path_str = str(request.args.get("path", "")).strip()
+    if not path_str:
+        return jsonify({"error": "path is required"}), 400
+    try:
+        f = _safe_csv_or_any(path_str)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not f.is_file():
+        return jsonify({"error": "path not found"}), 404
+    if f.suffix.lower() != ".csv":
+        return jsonify({"error": "expected a .csv path"}), 400
+    force = str(request.args.get("refresh", "")).strip().lower() in ("1", "true", "yes")
+    payload, err = _total_speed_gam_fit_payload(f, force_recompute=force)
+    if err:
+        return jsonify({"ok": False, "error": err})
+    assert payload is not None
+    return jsonify({"ok": True, **payload})
 
 
 @app.get("/api/total_speed_clips")

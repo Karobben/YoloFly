@@ -10,6 +10,7 @@
   <nav class="app-nav" aria-label="Primary">
     <a class="app-nav-link active" href="/">Project Manager</a>
     <a class="app-nav-link" href="/quickrun">Running progress</a>
+    <a class="app-nav-link" href="/gpu-monitor">GPU monitor</a>
     <a class="app-nav-link" href="/detect_explore">detect_explore</a>
   </nav>
   <header>
@@ -93,14 +94,41 @@
               <thead>
                 <tr>
                   <th class="col-cb" scope="col"></th>
-                  <th class="col-name video-col-fold-toggle" id="videoColHeader" scope="col" title="Click to fold or unfold all sub-clips">Video</th>
-                  <th class="col-num col-snap" scope="col" title="Class 0 / class 1 counts from the snapshot label file; green when aligned with Flies">Detected Flies</th>
-                  <th class="col-num" scope="col">Ø px</th>
-                  <th class="col-num" scope="col">R mm</th>
-                  <th class="col-num" scope="col">Frame start</th>
-                  <th class="col-num" scope="col">Frame end</th>
-                  <th class="col-num" scope="col">Flies</th>
-                  <th class="col-split" scope="col">Split</th>
+                  <th
+                    class="col-name video-th-sortable"
+                    data-video-sort="name"
+                    scope="col"
+                    id="videoColHeader"
+                    title="Click to sort by file name"
+                  >
+                    <span class="video-th-sort-label">Video</span>
+                    <button
+                      type="button"
+                      id="videoFoldAllBtn"
+                      class="video-col-fold-all-btn hidden"
+                      title="Fold or unfold all sub-clips"
+                      aria-label="Fold or unfold all sub-clips"
+                    >▶</button>
+                    <span class="video-sort-dir" aria-hidden="true"></span>
+                  </th>
+                  <th
+                    class="col-num col-clips video-th-sortable"
+                    data-video-sort="clips"
+                    scope="col"
+                    title="Number of saved clips for this video. Click to sort."
+                  >Clips<span class="video-sort-dir" aria-hidden="true"></span></th>
+                  <th
+                    class="col-num col-snap video-th-sortable"
+                    data-video-sort="snap"
+                    scope="col"
+                    title="Class 0 / class 1 counts from the snapshot label file; green when aligned with Flies. Click to sort."
+                  >Detected Flies<span class="video-sort-dir" aria-hidden="true"></span></th>
+                  <th class="col-num video-th-sortable" data-video-sort="disk_pixel" scope="col">Ø px<span class="video-sort-dir" aria-hidden="true"></span></th>
+                  <th class="col-num video-th-sortable" data-video-sort="disk_radius_mm" scope="col">R mm<span class="video-sort-dir" aria-hidden="true"></span></th>
+                  <th class="col-num video-th-sortable" data-video-sort="frame_start" scope="col">Frame start<span class="video-sort-dir" aria-hidden="true"></span></th>
+                  <th class="col-num video-th-sortable" data-video-sort="frame_end" scope="col">Frame end<span class="video-sort-dir" aria-hidden="true"></span></th>
+                  <th class="col-num video-th-sortable" data-video-sort="fly_count" scope="col">Flies<span class="video-sort-dir" aria-hidden="true"></span></th>
+                  <th class="col-split video-th-sortable" data-video-sort="split" scope="col">Split<span class="video-sort-dir" aria-hidden="true"></span></th>
                   <th class="col-actions" scope="col"></th>
                 </tr>
               </thead>
@@ -220,52 +248,233 @@
       </div>
       <p id="quickRunScopeText" class="quickrun-scope"></p>
       <p class="quickrun-note">Each video runs as its own pipeline job. After you start, you are sent to the progress page (logs and output paths per video).</p>
-      <div class="meta-grid quickrun-grid">
-        <label>Workers
-          <input id="quickRunWorkers" type="number" min="1" step="1" value="64" />
-        </label>
-        <label>Window overlap
-          <input id="quickRunWindowOverlap" type="number" min="0" step="1" value="200" />
-        </label>
-        <label>Speed window
-          <input id="quickRunSpeedWindow" type="number" min="1" step="1" value="300" />
-        </label>
-        <label>Output directory (-o)
-          <input id="quickRunOutputDir" type="text" value="QuickTestForAging" />
-        </label>
-        <label class="meta-span-2">Weights (--weights, relative to project parent)
-          <input id="quickRunWeights" type="text" value="YoloFly/runs/train/2022_05_11_p633_1280_5l_e700_b128/weights/best.pt" />
-        </label>
-        <label>Frame skip
-          <input id="quickRunFrameSkip" type="number" min="1" step="1" value="30" />
-        </label>
-        <label>Conf threshold
-          <input id="quickRunConfThres" type="number" step="any" value="0.3" />
-        </label>
-        <label>IoU threshold
-          <input id="quickRunIouThres" type="number" step="any" value="0.45" />
-        </label>
-        <label>Image size
-          <input id="quickRunImgsz" type="number" min="32" step="32" value="640" />
-        </label>
-        <label>Device
-          <input id="quickRunDevice" type="text" placeholder="empty = auto, or 0 / cpu" />
-        </label>
-        <label>Limit rows (0 = all)
-          <input id="quickRunLimit" type="number" min="0" step="1" value="0" />
-        </label>
-      </div>
-      <div class="quickrun-check-row">
-        <label><input id="quickRunSkipDetect" type="checkbox" /> Skip detection (reuse CSV)</label>
-        <label><input id="quickRunSkipTrack" type="checkbox" /> Skip tracking</label>
-        <label><input id="quickRunSkipViz" type="checkbox" /> Skip visualization</label>
-        <label><input id="quickRunRerun" type="checkbox" /> Rerun even if outputs exist</label>
+      <div class="quickrun-sections">
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Run</h3>
+          <div class="meta-grid quickrun-grid">
+            <label>Output directory (-o)
+              <input id="quickRunOutputDir" type="text" value="QuickTestForAging" />
+            </label>
+            <label>Limit rows (0 = all)
+              <input id="quickRunLimit" type="number" min="0" step="1" value="0" />
+            </label>
+          </div>
+          <div class="quickrun-check-row">
+            <label><input id="quickRunRerun" type="checkbox" /> Rerun even if outputs exist</label>
+          </div>
+        </section>
+
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">YOLO</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Weights (--weights, relative to project parent)
+              <input id="quickRunWeights" type="text" value="YoloFly/runs/train/2022_05_11_p633_1280_5l_e700_b128/weights/best.pt" />
+            </label>
+            <label>Conf threshold
+              <input id="quickRunConfThres" type="number" step="any" value="0.3" />
+            </label>
+            <label>IoU threshold
+              <input id="quickRunIouThres" type="number" step="any" value="0.45" />
+            </label>
+            <label>Image size
+              <input id="quickRunImgsz" type="number" min="32" step="32" value="640" />
+            </label>
+            <label>Device
+              <input id="quickRunDevice" type="text" placeholder="empty = auto, or 0 / cpu" />
+            </label>
+          </div>
+          <div class="quickrun-check-row">
+            <label><input id="quickRunSkipDetect" type="checkbox" /> Skip detection (reuse CSV)</label>
+            <label><input id="quickRunSkipTrack" type="checkbox" /> Skip tracking</label>
+            <label><input id="quickRunSkipViz" type="checkbox" /> Skip visualization</label>
+          </div>
+        </section>
+
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Gaps</h3>
+          <div class="meta-grid quickrun-grid">
+            <label>Workers
+              <input id="quickRunWorkers" type="number" min="1" step="1" value="64" />
+            </label>
+            <label>Window overlap
+              <input id="quickRunWindowOverlap" type="number" min="0" step="1" value="200" />
+            </label>
+            <label>Speed window
+              <input id="quickRunSpeedWindow" type="number" min="1" step="1" value="300" />
+            </label>
+            <label>Frame skip
+              <input id="quickRunFrameSkip" type="number" min="1" step="1" value="30" />
+            </label>
+          </div>
+        </section>
+
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">GAM</h3>
+          <div class="meta-grid quickrun-grid">
+            <label>GAM splines
+              <input id="quickRunGamSplines" type="number" min="4" step="1" value="25" />
+            </label>
+            <label>GAM grid frames
+              <input id="quickRunGamGridPoints" type="number" min="100" step="10" value="200" />
+            </label>
+            <label>Peak prominence factor
+              <input id="quickRunPeakPromFactor" type="number" min="0.01" step="0.01" value="0.2" />
+            </label>
+            <label>Peak min distance (frames)
+              <input id="quickRunPeakMinDistance" type="number" min="0" step="1" value="0" />
+            </label>
+          </div>
+        </section>
+
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Clips</h3>
+          <div class="meta-grid quickrun-grid">
+            <label>Auto subclip duration (minutes)
+              <input id="quickRunClipDurationMin" type="number" min="0.1" step="0.1" value="10" />
+            </label>
+            <label>Auto subclip FPS
+              <input id="quickRunClipFps" type="number" min="1" step="1" value="30" />
+            </label>
+          </div>
+        </section>
       </div>
       <div class="meta-actions-row quickrun-actions">
         <button id="quickRunStartBtn" type="button">Start pipeline</button>
         <button id="quickRunResetDefaultsBtn" type="button">Reset defaults</button>
       </div>
       <p id="quickRunModalStatus" class="meta-status"></p>
+    </div>
+  </div>
+
+  <div id="trackingBatchModal" class="video-modal quickrun-modal hidden" role="dialog" aria-modal="true" aria-label="Tracking batch">
+    <div class="video-modal-card quickrun-modal-card">
+      <div class="video-modal-header">
+        <strong>Tracking Batch</strong>
+        <button id="closeTrackingBatchModalBtn" type="button">Close</button>
+      </div>
+      <p id="trackingBatchScopeText" class="quickrun-scope"></p>
+      <p class="quickrun-note">Each selected video or subclip runs as its own detect_2.py tracking job. After you start, you are sent to the progress page.</p>
+      <div class="quickrun-sections">
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Run</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Tracking output base (--project)
+              <input id="trackingBatchOutputDir" type="text" value="traking" />
+            </label>
+            <label class="meta-span-2">Run name override (--name, only for one selected target)
+              <input id="trackingBatchNameOverride" type="text" placeholder="blank = auto-generated per target" />
+            </label>
+            <label class="meta-span-2">Tracking directory override (--tracking-dir, only for one selected target)
+              <input id="trackingBatchDirOverride" type="text" placeholder="blank = output base / auto run name" />
+            </label>
+          </div>
+          <div class="quickrun-check-row">
+            <label><input id="trackingBatchQuiet" type="checkbox" checked /> Add --quiet</label>
+            <label><input id="trackingBatchExistOk" type="checkbox" checked /> Add --exist-ok</label>
+            <label><input id="trackingBatchRerun" type="checkbox" /> Rerun even if tracking outputs exist</label>
+          </div>
+        </section>
+
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">detect_2 optional flags</h3>
+          <p class="quickrun-note">
+            When enabled, passes <code>--bh-count</code>, <code>--tar-track</code> with <code>--tar-tr-start</code>, and <code>--head-bind</code>.
+            When disabled (default), none of these are added to the command line.
+          </p>
+          <div class="quickrun-check-row">
+            <label>
+              <input id="trackingBatchDetectFlagsSection" type="checkbox" />
+              Enable optional tracking flags (--bh-count, --tar-track + --tar-tr-start, --head-bind)
+            </label>
+          </div>
+        </section>
+
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Frames</h3>
+          <div class="meta-grid quickrun-grid">
+            <label>--tar-tr-start override
+              <input id="trackingBatchTarTrStart" type="number" min="1" step="1" placeholder="blank = row start" />
+            </label>
+            <label>--frame-start override
+              <input id="trackingBatchFrameStart" type="number" min="1" step="1" placeholder="blank = row start" />
+            </label>
+            <label>--frame-end override
+              <input id="trackingBatchFrameEnd" type="number" min="1" step="1" placeholder="blank = row/subclip end" />
+            </label>
+          </div>
+        </section>
+
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">YOLO</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Weights (--weights, relative to project parent)
+              <input id="trackingBatchWeights" type="text" value="YoloFly/runs/train/2022_05_11_p633_1280_5l_e700_b128/weights/best.pt" />
+            </label>
+            <label>Device (--device)
+              <input id="trackingBatchDevice" type="text" placeholder="e.g. 0 or cpu or 0,1,2 for parallel jobs" />
+            </label>
+            <label>Conf threshold
+              <input id="trackingBatchConfThres" type="number" step="any" value="0.4" />
+            </label>
+            <label>Image size
+              <input id="trackingBatchImgSize" type="number" min="32" step="32" value="1280" />
+            </label>
+          </div>
+        </section>
+
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Initialization</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Init label path override (--init-label-path, only for one selected target)
+              <input id="trackingBatchInitLabelPath" type="text" placeholder="blank = Snapshot label lookup" />
+            </label>
+          </div>
+          <div class="quickrun-check-row">
+            <label><input id="trackingBatchUseSnapshotInit" type="checkbox" checked /> Initialize first tracked frame from Snapshot labels when available</label>
+            <label><input id="trackingBatchAllowMissingInit" type="checkbox" /> If Snapshot labels are missing, fall back to model output without asking again</label>
+          </div>
+        </section>
+
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Derived per-target parameters</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Selected --source values
+              <textarea id="trackingBatchSourcePreview" rows="4" readonly></textarea>
+            </label>
+            <label class="meta-span-2">Auto-generated parameters
+              <textarea id="trackingBatchDerivedPreview" rows="6" readonly></textarea>
+            </label>
+          </div>
+        </section>
+      </div>
+      <div class="meta-actions-row quickrun-actions">
+        <button id="trackingBatchStartBtn" type="button">Start tracking</button>
+        <button id="trackingBatchResetDefaultsBtn" type="button">Reset defaults</button>
+      </div>
+      <p id="trackingBatchModalStatus" class="meta-status"></p>
+    </div>
+  </div>
+
+  <div
+    id="trackingOpenModal"
+    class="video-modal meta-modal tracking-open-modal hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Review tracking parameters before opening Detect explorer"
+  >
+    <div class="video-modal-card meta-modal-card tracking-open-modal-card">
+      <div class="video-modal-header">
+        <strong>Open Tracking</strong>
+        <button id="closeTrackingOpenModalBtn" type="button">Close</button>
+      </div>
+      <p class="tracking-open-hint">
+        Review parameters below, then open <strong>Detect explorer</strong> in a new tab (CSV / Video view with tracking JSON).
+      </p>
+      <dl id="trackingOpenModalParams" class="tracking-open-dl"></dl>
+      <p id="trackingOpenModalManifest" class="tracking-open-manifest meta-status" aria-live="polite"></p>
+      <div class="meta-actions-row">
+        <button id="trackingOpenConfirmBtn" type="button">Open in Detect explorer</button>
+      </div>
     </div>
   </div>
 

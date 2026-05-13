@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GPU Monitor</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="quickrun-page">
+  <nav class="app-nav" aria-label="Primary">
+    <a class="app-nav-link" href="/">Project Manager</a>
+    <a class="app-nav-link" href="/quickrun">Running progress</a>
+    <a class="app-nav-link active" href="/gpu-monitor">GPU monitor</a>
+    <a class="app-nav-link" href="/detect_explore">detect_explore</a>
+  </nav>
+  <header class="quickrun-header">
+    <h1>GPU Monitor</h1>
+    <p class="quickrun-sub">
+      Live GPU utilization and running QuickRun YOLO jobs. Kill buttons send terminate signals to running
+      <code>detect_2.py</code> jobs (tracking/snapshot) and mark the job failed in history.
+    </p>
+  </header>
+  <main class="quickrun-main">
+    <p id="gpuMonitorStatus" class="meta-status"></p>
+    <section class="quickrun-panel">
+      <h2>GPUs</h2>
+      <div id="gpuTableWrap"></div>
+    </section>
+    <section class="quickrun-panel">
+      <h2>Running Jobs Not Mapped To A GPU</h2>
+      <div id="gpuUnmappedJobs"></div>
+    </section>
+  </main>
+  <script src="/static/gpu_monitor.js"></script>
+</body>
+</html>
