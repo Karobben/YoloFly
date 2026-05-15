@@ -78,6 +78,18 @@ function renderMetaDl(snapshot) {
       rows.push(["Subclip id", snapshot.subclip_clip_id]);
     }
   }
+  if (snapshot.job_kind === "post_track") {
+    rows.push(
+      ["Job type", "Post_track (fly paths JSON)"],
+      ["Detection CSV (input)", snapshot.post_track_input_csv],
+      ["Post_track output CSV (intermediate)", snapshot.post_track_output_csv],
+      ["Workers", snapshot.post_track_workers],
+      ["JSON-only cleanup", snapshot.post_track_json_only ? "yes" : "no"],
+    );
+    if (snapshot.subclip_clip_id != null) {
+      rows.push(["Subclip id", snapshot.subclip_clip_id]);
+    }
+  }
   const parts = rows
     .filter(([, v]) => v != null && v !== "")
     .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`);
@@ -94,6 +106,9 @@ function renderOutputs(outputs) {
     );
   }
   if (outputs.resolve_error) lines.push(`<p class="qr-warn">${esc(outputs.resolve_error)}</p>`);
+  if (outputs.job_kind === "post_track" && outputs.post_track_save_dir) {
+    lines.push(`<div><strong>Tracking folder</strong> <code>${esc(outputs.post_track_save_dir)}</code></div>`);
+  }
   if (outputs.video_file) lines.push(`<div><strong>Video</strong> <code>${esc(outputs.video_file)}</code></div>`);
   if (outputs.detection_csv) lines.push(`<div><strong>Detection CSV</strong> <code>${esc(outputs.detection_csv)}</code></div>`);
   if (outputs.track_stem) lines.push(`<div><strong>Track base</strong> <code>${esc(outputs.track_stem)}</code></div>`);
@@ -125,6 +140,10 @@ function renderJobCard(job) {
       ? `<h4>Log (tail)</h4><pre class="quickrun-pre qr-log">${esc(job.log_tail)}</pre>`
       : "<p class=\"qr-muted\">No log output yet.</p>";
   const outHtml = st === "done" ? renderOutputs(job.outputs) : "";
+  const runCmd = job.run_command && String(job.run_command).trim();
+  const cmdBlock = runCmd
+    ? `<details class="qr-details" open><summary>Command line</summary><pre class="quickrun-pre qr-run-cmd">${esc(runCmd)}</pre></details>`
+    : "";
 
   return `
     <article class="qr-job-card">
@@ -154,6 +173,7 @@ function renderJobCard(job) {
           ? `<details class="qr-details" open><summary>Output files</summary>${outHtml}</details>`
           : ""
       }
+      ${cmdBlock}
     </article>
   `;
 }

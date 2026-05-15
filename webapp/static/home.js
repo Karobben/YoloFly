@@ -233,7 +233,36 @@ const videoSelectAll = document.getElementById("videoSelectAll");
 const batchDeleteVideosBtn = document.getElementById("batchDeleteVideosBtn");
 const quickRunFastviewBtn = document.getElementById("quickRunFastviewBtn");
 const snapshotBatchBtn = document.getElementById("snapshotBatchBtn");
+const snapshotBatchModal = document.getElementById("snapshotBatchModal");
+const snapshotBatchScopeText = document.getElementById("snapshotBatchScopeText");
+const closeSnapshotBatchModalBtn = document.getElementById("closeSnapshotBatchModalBtn");
+const snapshotBatchStartBtn = document.getElementById("snapshotBatchStartBtn");
+const snapshotBatchResetDefaultsBtn = document.getElementById("snapshotBatchResetDefaultsBtn");
+const snapshotBatchModalStatus = document.getElementById("snapshotBatchModalStatus");
+const snapshotBatchOutputDir = document.getElementById("snapshotBatchOutputDir");
+const snapshotBatchWeights = document.getElementById("snapshotBatchWeights");
+const snapshotBatchConfThres = document.getElementById("snapshotBatchConfThres");
+const snapshotBatchImgSize = document.getElementById("snapshotBatchImgSize");
+const snapshotBatchQuiet = document.getElementById("snapshotBatchQuiet");
+const snapshotBatchExistOk = document.getElementById("snapshotBatchExistOk");
+const snapshotBatchRerun = document.getElementById("snapshotBatchRerun");
+const snapshotBatchSourcePreview = document.getElementById("snapshotBatchSourcePreview");
+const snapshotBatchDerivedPreview = document.getElementById("snapshotBatchDerivedPreview");
+const snapshotBatchCommandPreview = document.getElementById("snapshotBatchCommandPreview");
 const trackingBatchBtn = document.getElementById("trackingBatchBtn");
+const postTrackBatchBtn = document.getElementById("postTrackBatchBtn");
+const postTrackBatchModal = document.getElementById("postTrackBatchModal");
+const postTrackBatchScopeText = document.getElementById("postTrackBatchScopeText");
+const closePostTrackBatchModalBtn = document.getElementById("closePostTrackBatchModalBtn");
+const postTrackBatchStartBtn = document.getElementById("postTrackBatchStartBtn");
+const postTrackBatchResetDefaultsBtn = document.getElementById("postTrackBatchResetDefaultsBtn");
+const postTrackBatchModalStatus = document.getElementById("postTrackBatchModalStatus");
+const postTrackBatchNumFly = document.getElementById("postTrackBatchNumFly");
+const postTrackBatchWorkers = document.getElementById("postTrackBatchWorkers");
+const postTrackBatchUseSnapshotInit = document.getElementById("postTrackBatchUseSnapshotInit");
+const postTrackBatchRerun = document.getElementById("postTrackBatchRerun");
+const postTrackBatchSourcePreview = document.getElementById("postTrackBatchSourcePreview");
+const postTrackBatchCommandPreview = document.getElementById("postTrackBatchCommandPreview");
 const quickRunModal = document.getElementById("quickRunModal");
 const quickRunScopeText = document.getElementById("quickRunScopeText");
 const closeQuickRunModalBtn = document.getElementById("closeQuickRunModalBtn");
@@ -291,6 +320,7 @@ const trackingBatchAllowMissingInit = document.getElementById("trackingBatchAllo
 const trackingBatchRerun = document.getElementById("trackingBatchRerun");
 const trackingBatchSourcePreview = document.getElementById("trackingBatchSourcePreview");
 const trackingBatchDerivedPreview = document.getElementById("trackingBatchDerivedPreview");
+const trackingBatchCommandPreview = document.getElementById("trackingBatchCommandPreview");
 const videoMetaTsvPath = document.getElementById("videoMetaTsvPath");
 const importVideoMetaTsvBtn = document.getElementById("importVideoMetaTsvBtn");
 const exportVideoMetaTsvBtn = document.getElementById("exportVideoMetaTsvBtn");
@@ -300,10 +330,14 @@ let projects = [];
 let dragProjectName = null;
 let selectedProject = "";
 let editingVideoPath = "";
+/** Selected videos/subclips when the Snapshot batch modal opens. */
+let snapshotBatchItems = null;
 /** When non-null, QuickRun uses only these paths; null means all project videos. */
 let quickRunVideoPaths = null;
 /** Selected videos/subclips captured when the Tracking Batch modal opens. */
 let trackingBatchItems = null;
+/** Selected videos/subclips captured when the Post_track modal opens. */
+let postTrackBatchItems = null;
 /** Last full project payload from the server (for QuickRun default output dir, etc.). */
 let cachedProjectDetail = null;
 /** Registered video table sort: `key` null = server order. */
@@ -315,6 +349,9 @@ let gClipCountsForSort = Object.create(null);
 let gClipCountsForSortProject = null;
 /** Full URL path for Detect explorer after Tracking review modal (path + query only). */
 let trackingOpenPendingUrl = "";
+let trackingCommandPreviewTimer = null;
+let postTrackCommandPreviewTimer = null;
+let snapshotCommandPreviewTimer = null;
 
 const QUICK_RUN_DEFAULTS = {
   workers: 64,
@@ -357,6 +394,23 @@ const TRACKING_BATCH_DEFAULTS = {
   initLabelPath: "",
   useSnapshotInit: true,
   allowMissingInit: false,
+  rerun: false,
+};
+
+const POST_TRACK_BATCH_DEFAULTS = {
+  numFly: "",
+  workers: 1,
+  useSnapshotInit: true,
+  rerun: false,
+};
+
+const SNAPSHOT_BATCH_DEFAULTS = {
+  outputDir: "snapshot",
+  weights: QUICK_RUN_DEFAULTS.weights,
+  confThres: 0.4,
+  imgSize: 1280,
+  quiet: true,
+  existOk: true,
   rerun: false,
 };
 
@@ -406,6 +460,222 @@ function applyTrackingBatchDefaultsToForm() {
   trackingBatchUseSnapshotInit.checked = TRACKING_BATCH_DEFAULTS.useSnapshotInit;
   trackingBatchAllowMissingInit.checked = TRACKING_BATCH_DEFAULTS.allowMissingInit;
   trackingBatchRerun.checked = TRACKING_BATCH_DEFAULTS.rerun;
+}
+
+function applyPostTrackBatchDefaultsToForm() {
+  if (!postTrackBatchWorkers) return;
+  postTrackBatchNumFly.value = POST_TRACK_BATCH_DEFAULTS.numFly;
+  postTrackBatchWorkers.value = String(POST_TRACK_BATCH_DEFAULTS.workers);
+  postTrackBatchUseSnapshotInit.checked = POST_TRACK_BATCH_DEFAULTS.useSnapshotInit;
+  postTrackBatchRerun.checked = POST_TRACK_BATCH_DEFAULTS.rerun;
+}
+
+function applySnapshotBatchDefaultsToForm() {
+  if (!snapshotBatchOutputDir) return;
+  snapshotBatchOutputDir.value = SNAPSHOT_BATCH_DEFAULTS.outputDir;
+  snapshotBatchWeights.value = SNAPSHOT_BATCH_DEFAULTS.weights;
+  snapshotBatchConfThres.value = String(SNAPSHOT_BATCH_DEFAULTS.confThres);
+  snapshotBatchImgSize.value = String(SNAPSHOT_BATCH_DEFAULTS.imgSize);
+  if (snapshotBatchQuiet) snapshotBatchQuiet.checked = SNAPSHOT_BATCH_DEFAULTS.quiet;
+  if (snapshotBatchExistOk) snapshotBatchExistOk.checked = SNAPSHOT_BATCH_DEFAULTS.existOk;
+  if (snapshotBatchRerun) snapshotBatchRerun.checked = SNAPSHOT_BATCH_DEFAULTS.rerun;
+}
+
+function updateSnapshotBatchDerivedPreview() {
+  if (!snapshotBatchItems || !snapshotBatchDerivedPreview) return;
+  if (snapshotBatchSourcePreview) {
+    snapshotBatchSourcePreview.value = snapshotBatchItems
+      .map((it) => it.video_path)
+      .join("\n");
+  }
+  const lines = [
+    "--snapshot-frame: main row uses video frame_start (min 1); subclip uses clip start from total_speed_clips",
+    "--project: Snapshot output base below (or project Meta default when blank matches)",
+    "--name: auto-generated per target (includes hash)",
+    "--quiet / --exist-ok / rerun: from checkboxes below",
+    "",
+    "Targets:",
+    ...snapshotBatchItems.map((it, idx) => `${idx + 1}. ${trackingBatchItemPreview(it)}`),
+  ];
+  snapshotBatchDerivedPreview.value = lines.join("\n");
+}
+
+function collectSnapshotBatchPayload() {
+  if (!selectedProject || !snapshotBatchItems || !snapshotBatchItems.length) {
+    throw new Error("Select at least one video and/or subclip for snapshot batch.");
+  }
+  const conf_thres = parseFloat(snapshotBatchConfThres.value);
+  const img_size = parseInt(snapshotBatchImgSize.value, 10);
+  if (!Number.isFinite(conf_thres)) throw new Error("confidence threshold must be a valid number.");
+  if (!Number.isFinite(img_size)) throw new Error("image size must be a valid integer.");
+  return {
+    name: selectedProject,
+    items: snapshotBatchItems,
+    weights: (snapshotBatchWeights.value || "").trim(),
+    snapshot_output: (snapshotBatchOutputDir && snapshotBatchOutputDir.value
+      ? snapshotBatchOutputDir.value.trim()
+      : ""),
+    conf_thres,
+    img_size,
+    quiet: !!(snapshotBatchQuiet && snapshotBatchQuiet.checked),
+    exist_ok: !!(snapshotBatchExistOk && snapshotBatchExistOk.checked),
+    rerun: !!(snapshotBatchRerun && snapshotBatchRerun.checked),
+  };
+}
+
+async function refreshSnapshotBatchCommandPreview() {
+  if (!snapshotBatchCommandPreview) return;
+  if (!snapshotBatchModal || snapshotBatchModal.classList.contains("hidden")) return;
+  if (!selectedProject || !snapshotBatchItems || !snapshotBatchItems.length) {
+    snapshotBatchCommandPreview.value = "No targets selected.";
+    return;
+  }
+  let payload;
+  try {
+    payload = collectSnapshotBatchPayload();
+  } catch (err) {
+    snapshotBatchCommandPreview.value = String(err && err.message ? err.message : err);
+    return;
+  }
+  payload.preview_only = true;
+  snapshotBatchCommandPreview.value = "Resolving commands...";
+  try {
+    const resp = await req("/api/project/snapshot_batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    snapshotBatchCommandPreview.value = formatCommandPreview(resp.commands);
+  } catch (err) {
+    snapshotBatchCommandPreview.value = `Preview unavailable: ${err && err.message ? err.message : "request failed"}`;
+  }
+}
+
+function scheduleSnapshotBatchCommandPreview() {
+  if (snapshotCommandPreviewTimer) clearTimeout(snapshotCommandPreviewTimer);
+  snapshotCommandPreviewTimer = setTimeout(() => {
+    refreshSnapshotBatchCommandPreview().catch(() => {});
+  }, 250);
+}
+
+function openSnapshotBatchModal(items) {
+  if (!snapshotBatchModal) return;
+  snapshotBatchItems = items.slice();
+  if (snapshotBatchScopeText) {
+    snapshotBatchScopeText.textContent = `Will run snapshot on ${summarizeTrackingBatchItems(snapshotBatchItems)}.`;
+  }
+  if (snapshotBatchModalStatus) snapshotBatchModalStatus.textContent = "";
+  applySnapshotBatchDefaultsToForm();
+  if (
+    snapshotBatchOutputDir &&
+    cachedProjectDetail &&
+    cachedProjectDetail.name === selectedProject &&
+    (cachedProjectDetail.snapshot_output || "").trim()
+  ) {
+    snapshotBatchOutputDir.value = cachedProjectDetail.snapshot_output.trim();
+  }
+  updateSnapshotBatchDerivedPreview();
+  if (snapshotBatchCommandPreview) {
+    snapshotBatchCommandPreview.value = "";
+  }
+  snapshotBatchModal.classList.remove("hidden");
+  scheduleSnapshotBatchCommandPreview();
+}
+
+function closeSnapshotBatchModal() {
+  if (snapshotBatchModal) snapshotBatchModal.classList.add("hidden");
+}
+
+function updatePostTrackBatchPreview() {
+  if (!postTrackBatchItems || !postTrackBatchSourcePreview) return;
+  postTrackBatchSourcePreview.value = postTrackBatchItems
+    .map((it) => trackingBatchItemPreview(it))
+    .join("\n");
+}
+
+function collectPostTrackBatchPayload() {
+  if (!selectedProject || !postTrackBatchItems || !postTrackBatchItems.length) {
+    throw new Error("Select at least one video and/or subclip for Tracking.");
+  }
+  const body = {
+    name: selectedProject,
+    items: postTrackBatchItems,
+    use_snapshot_init: !!(postTrackBatchUseSnapshotInit && postTrackBatchUseSnapshotInit.checked),
+    rerun: !!(postTrackBatchRerun && postTrackBatchRerun.checked),
+  };
+  if (postTrackBatchNumFly) {
+    const n = parseInt(postTrackBatchNumFly.value || "", 10);
+    if (Number.isFinite(n) && n > 0) body.num_fly = n;
+  }
+  if (postTrackBatchWorkers) {
+    const w = parseInt(postTrackBatchWorkers.value || "1", 10);
+    body.post_track_workers = Number.isFinite(w) && w > 0 ? w : 1;
+  }
+  return body;
+}
+
+function formatCommandPreview(commands) {
+  if (!Array.isArray(commands) || !commands.length) {
+    return "No runnable commands.";
+  }
+  return commands
+    .map((c, idx) => `${idx + 1}. ${c.command || (Array.isArray(c.argv) ? c.argv.join(" ") : "")}`)
+    .join("\n");
+}
+
+async function refreshPostTrackBatchCommandPreview() {
+  if (!postTrackBatchCommandPreview) return;
+  if (!postTrackBatchModal || postTrackBatchModal.classList.contains("hidden")) return;
+  if (!selectedProject || !postTrackBatchItems || !postTrackBatchItems.length) {
+    postTrackBatchCommandPreview.value = "No targets selected.";
+    return;
+  }
+  let payload;
+  try {
+    payload = collectPostTrackBatchPayload();
+  } catch (err) {
+    postTrackBatchCommandPreview.value = String(err && err.message ? err.message : err);
+    return;
+  }
+  payload.preview_only = true;
+  postTrackBatchCommandPreview.value = "Resolving commands...";
+  try {
+    const resp = await req("/api/project/post_track_batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    postTrackBatchCommandPreview.value = formatCommandPreview(resp.commands);
+  } catch (err) {
+    postTrackBatchCommandPreview.value = `Preview unavailable: ${err && err.message ? err.message : "request failed"}`;
+  }
+}
+
+function schedulePostTrackBatchCommandPreview() {
+  if (postTrackCommandPreviewTimer) clearTimeout(postTrackCommandPreviewTimer);
+  postTrackCommandPreviewTimer = setTimeout(() => {
+    refreshPostTrackBatchCommandPreview().catch(() => {});
+  }, 250);
+}
+
+function openPostTrackBatchModal(items) {
+  if (!postTrackBatchModal) return;
+  postTrackBatchItems = items.slice();
+  if (postTrackBatchScopeText) {
+    postTrackBatchScopeText.textContent = `Will run Post_track on ${summarizeTrackingBatchItems(postTrackBatchItems)}.`;
+  }
+  if (postTrackBatchModalStatus) postTrackBatchModalStatus.textContent = "";
+  applyPostTrackBatchDefaultsToForm();
+  updatePostTrackBatchPreview();
+  if (postTrackBatchCommandPreview) {
+    postTrackBatchCommandPreview.value = "";
+  }
+  postTrackBatchModal.classList.remove("hidden");
+  schedulePostTrackBatchCommandPreview();
+}
+
+function closePostTrackBatchModal() {
+  if (postTrackBatchModal) postTrackBatchModal.classList.add("hidden");
 }
 
 function openQuickRunModal(selectedPaths) {
@@ -497,6 +767,41 @@ function updateTrackingBatchDerivedPreview() {
   }
 }
 
+async function refreshTrackingBatchCommandPreview() {
+  if (!trackingBatchCommandPreview) return;
+  if (!trackingBatchModal || trackingBatchModal.classList.contains("hidden")) return;
+  if (!selectedProject || !trackingBatchItems || !trackingBatchItems.length) {
+    trackingBatchCommandPreview.value = "No targets selected.";
+    return;
+  }
+  let payload;
+  try {
+    payload = collectTrackingBatchPayload(true);
+  } catch (err) {
+    trackingBatchCommandPreview.value = String(err && err.message ? err.message : err);
+    return;
+  }
+  payload.preview_only = true;
+  trackingBatchCommandPreview.value = "Resolving commands...";
+  try {
+    const resp = await req("/api/project/tracking_batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    trackingBatchCommandPreview.value = formatCommandPreview(resp.commands);
+  } catch (err) {
+    trackingBatchCommandPreview.value = `Preview unavailable: ${err && err.message ? err.message : "request failed"}`;
+  }
+}
+
+function scheduleTrackingBatchCommandPreview() {
+  if (trackingCommandPreviewTimer) clearTimeout(trackingCommandPreviewTimer);
+  trackingCommandPreviewTimer = setTimeout(() => {
+    refreshTrackingBatchCommandPreview().catch(() => {});
+  }, 250);
+}
+
 function openTrackingBatchModal(items) {
   if (!trackingBatchModal) return;
   trackingBatchItems = items.slice();
@@ -514,7 +819,11 @@ function openTrackingBatchModal(items) {
     trackingBatchOutputDir.value = cachedProjectDetail.tracking_output.trim();
   }
   updateTrackingBatchDerivedPreview();
+  if (trackingBatchCommandPreview) {
+    trackingBatchCommandPreview.value = "";
+  }
   trackingBatchModal.classList.remove("hidden");
+  scheduleTrackingBatchCommandPreview();
 }
 
 function closeTrackingBatchModal() {
@@ -788,7 +1097,7 @@ function updateVideoSortHeaderIndicators() {
   }
 }
 
-const VIDEO_TABLE_COLSPAN = 11;
+const VIDEO_TABLE_COLSPAN = 13;
 
 function mkVideoNumTd(val) {
   const td = document.createElement("td");
@@ -838,6 +1147,22 @@ function mkVideoSnapTdPlaceholder() {
   return td;
 }
 
+function mkVideoDetectTdPlaceholder() {
+  const td = document.createElement("td");
+  td.className = "col-num-cell video-result-cell video-detect-cell";
+  td.textContent = "…";
+  td.title = "Loading detection result status…";
+  return td;
+}
+
+function mkVideoTrackTdPlaceholder() {
+  const td = document.createElement("td");
+  td.className = "col-num-cell video-result-cell video-track-cell";
+  td.textContent = "…";
+  td.title = "Loading tracking result status…";
+  return td;
+}
+
 /** Green when sum of classes equals Flies, or both class counts equal Flies (e.g. 24/24 vs 24). */
 function snapCountsMatchFlies(c, fly) {
   if (c == null || !c.has_snapshot) return false;
@@ -853,8 +1178,32 @@ function snapCountsMatchFlies(c, fly) {
   return false;
 }
 
-function applySnapCountsToCell(td, c, emptyTitle) {
+async function openSnapshotInDetectExplore(projectName, videoPath, clipId = null) {
+  if (!projectName || !videoPath) return;
+  const q = new URLSearchParams({
+    name: String(projectName),
+    video_path: String(videoPath),
+  });
+  if (clipId != null && String(clipId).trim() !== "") q.set("clip_id", String(clipId));
+  const r = await req(`/api/project/snapshot_open_url?${q.toString()}`);
+  const href = r.open_url || (r.snapshot_dir ? `/detect_explore?snapshot_dir=${encodeURIComponent(r.snapshot_dir)}` : "");
+  if (!href) throw new Error("Snapshot path is unavailable.");
+  window.open(href, "_blank", "noopener");
+}
+
+function openTrackingInDetectExplore(trackingDir, videoPath) {
+  if (!trackingDir || !videoPath) return;
+  const q = new URLSearchParams({
+    tracking_dir: String(trackingDir),
+    video_path: String(videoPath),
+  });
+  window.open(`/detect_explore?${q.toString()}`, "_blank", "noopener");
+}
+
+function applySnapCountsToCell(td, c, emptyTitle, openParams = null) {
   td.classList.remove("video-snap-match", "video-snap-mismatch");
+  td.onclick = null;
+  td.style.cursor = "";
   if (!c || !c.has_snapshot) {
     td.textContent = "—";
     td.title = emptyTitle;
@@ -866,6 +1215,130 @@ function applySnapCountsToCell(td, c, emptyTitle) {
   if (fly != null && fly !== "") {
     if (snapCountsMatchFlies(c, fly)) td.classList.add("video-snap-match");
     else td.classList.add("video-snap-mismatch");
+  }
+  if (
+    openParams
+    && openParams.projectName
+    && openParams.videoPath
+  ) {
+    td.style.cursor = "pointer";
+    td.title += " Click to open this snapshot in detect_explore.";
+    td.onclick = async () => {
+      try {
+        await openSnapshotInDetectExplore(
+          openParams.projectName,
+          openParams.videoPath,
+          openParams.clipId ?? null,
+        );
+      } catch (err) {
+        setStatus(err.message || "Could not open snapshot in detect_explore.");
+      }
+    };
+  }
+}
+
+function parseResultStatusFromArtifacts(payload) {
+  const artifacts = payload && Array.isArray(payload.artifacts) ? payload.artifacts : [];
+  let hasDetection = false;
+  let trackingDir = "";
+  for (const a of artifacts) {
+    if (!a || typeof a !== "object") continue;
+    const kind = String(a.kind || "").toLowerCase();
+    const label = String(a.label || "").toLowerCase();
+    const path = String(a.path || "");
+    if (kind === "detection_csv" || kind === "tracked_json") {
+      hasDetection = true;
+      continue;
+    }
+    if (kind !== "output_directory") continue;
+    const isPostTrack = label.includes("post-track");
+    const isTracking = label.includes("tracking");
+    if (isTracking && !isPostTrack) hasDetection = true;
+    if (isPostTrack && path) trackingDir = path;
+  }
+  return { hasDetection, trackingDir };
+}
+
+function applyDetectionStatusToCell(td, hasDetection) {
+  td.onclick = null;
+  td.style.cursor = "";
+  td.textContent = hasDetection ? "Yes" : "—";
+  td.title = hasDetection
+    ? "Detection output exists."
+    : "No detection output found for this row.";
+}
+
+function applyTrackingStatusToCell(td, trackingDir, videoPath) {
+  td.onclick = null;
+  td.style.cursor = "";
+  td.textContent = "";
+  if (!trackingDir) {
+    td.textContent = "—";
+    td.title = "No Post_track output found for this row.";
+    return;
+  }
+  td.title = `Post_track output exists at ${trackingDir}.`;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "video-result-open-btn";
+  btn.textContent = "Open";
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    openTrackingInDetectExplore(trackingDir, videoPath);
+  };
+  td.appendChild(btn);
+}
+
+async function loadDetectionTrackingStatuses(projectName) {
+  if (!projectName || !videoList) return;
+  const rows = [...videoList.querySelectorAll("tr[data-video-path]")];
+  if (!rows.length) return;
+  const reqMap = new Map();
+  const keyOfRow = (row) => {
+    const p = row.dataset.videoPath || "";
+    const cid = row.dataset.clipId || "";
+    return `${p}\t${cid}`;
+  };
+  for (const row of rows) {
+    const p = row.dataset.videoPath || "";
+    if (!p) continue;
+    const cid = row.dataset.clipId || "";
+    const key = `${p}\t${cid}`;
+    if (!reqMap.has(key)) {
+      const q = new URLSearchParams({
+        video_path: String(p),
+        project: String(projectName),
+      });
+      if (cid) q.set("clip_id", cid);
+      reqMap.set(
+        key,
+        req(`/api/quickrun/results_for_video?${q.toString()}`)
+          .then((r) => ({ ok: true, data: r }))
+          .catch((err) => ({ ok: false, error: err })),
+      );
+    }
+  }
+  const entries = [...reqMap.entries()];
+  const settled = await Promise.all(entries.map(([, p]) => p));
+  if (selectedProject !== projectName) return;
+  const byKey = new Map(entries.map(([k], i) => [k, settled[i]]));
+  for (const row of rows) {
+    const tdDet = row.querySelector(".video-detect-cell");
+    const tdTrk = row.querySelector(".video-track-cell");
+    if (!tdDet || !tdTrk) continue;
+    const key = keyOfRow(row);
+    const res = byKey.get(key);
+    if (!res || !res.ok) {
+      applyDetectionStatusToCell(tdDet, false);
+      applyTrackingStatusToCell(tdTrk, "", row.dataset.videoPath || "");
+      tdDet.title = "Could not load detection status";
+      tdTrk.title = "Could not load tracking status";
+      continue;
+    }
+    const { hasDetection, trackingDir } = parseResultStatusFromArtifacts(res.data || {});
+    const videoPath = String((res.data && res.data.video_path) || row.dataset.videoPath || "");
+    applyDetectionStatusToCell(tdDet, hasDetection);
+    applyTrackingStatusToCell(tdTrk, trackingDir, videoPath);
   }
 }
 
@@ -889,6 +1362,7 @@ async function loadSnapshotLabelCounts(projectName) {
         td,
         counts[p],
         "No snapshot label indexed for this video (run Snapshot batch)",
+        { projectName, videoPath: p },
       );
     }
     for (const row of videoList.querySelectorAll(
@@ -904,6 +1378,7 @@ async function loadSnapshotLabelCounts(projectName) {
         td,
         c,
         "No snapshot label for this subclip (run Snapshot with subclip selected)",
+        { projectName, videoPath: p, clipId: cid },
       );
     }
   } catch (_err) {
@@ -940,8 +1415,50 @@ function closeTrackingOpenModal() {
   trackingOpenPendingUrl = "";
 }
 
+async function runPostTrackForSubclip({ trackingDir, videoPath, clip, numFly }) {
+  if (!selectedProject) {
+    setStatus("Select a project first.");
+    return;
+  }
+  setStatus("Queueing Post_track…");
+  try {
+    const body = {
+      name: selectedProject,
+      use_snapshot_init: true,
+      items: [{
+        type: "subclip",
+        video_path: String(videoPath),
+        source_csv: String(clip && clip.source_csv ? clip.source_csv : ""),
+        clip_id: clip && clip.id != null ? Number(clip.id) : null,
+      }],
+    };
+    if (numFly != null && Number.isFinite(numFly) && numFly > 0) {
+      body.num_fly = Math.round(numFly);
+    }
+    const resp = await fetch("/api/project/post_track_batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data.error || `HTTP ${resp.status}`);
+    }
+    const sid = data.session_id || "";
+    setStatus(
+      sid
+        ? `Post_track queued (session ${sid.slice(0, 8)}…). JSON → ${String(trackingDir)}/`
+        : "Post_track queued.",
+    );
+    const qu = data.quickrun_url || (sid ? `/quickrun?session=${sid}` : "");
+    if (qu) window.open(qu, "_blank", "noopener");
+  } catch (e) {
+    setStatus(e.message || String(e));
+  }
+}
+
 /**
- * Subclip “Tracking”: show all query/manifest parameters, then user opens Detect explorer.
+ * Subclip “Detection”: show all query/manifest parameters, then user opens Detect explorer.
  */
 function openTrackingReviewModal({ trackingDir, videoPath, clip }) {
   if (!trackingOpenModal || !trackingOpenModalParams) return;
@@ -978,7 +1495,7 @@ function openTrackingReviewModal({ trackingDir, videoPath, clip }) {
       label: "Total-speed CSV (subclip)",
       value: clip && clip.source_csv ? String(clip.source_csv) : "—",
     },
-    { label: "Tracking output directory (tracking_dir)", value: trackingDir },
+    { label: "YOLO detection folder (tracking_dir)", value: trackingDir },
     { label: "video_path (query)", value: videoPath },
     { label: "Full URL to open", value: absUrl },
   ]);
@@ -1140,19 +1657,39 @@ function buildVideoSubclipRow(parentPath, videoEntry, clip) {
   }
   if (clip.has_tracking && clip.tracking_output_dir) {
     metaDiv.appendChild(document.createTextNode(" · "));
-    const t = document.createElement("button");
-    t.type = "button";
-    t.textContent = "Tracking";
-    t.className = "video-subclip-plot-link";
-    t.title = "Review parameters, then open Detect explorer in a new tab";
-    t.onclick = () => {
+    const detBtn = document.createElement("button");
+    detBtn.type = "button";
+    detBtn.textContent = "Detection";
+    detBtn.className = "video-subclip-plot-link";
+    detBtn.title = "Review parameters, then open Detect explorer (detection CSV + video)";
+    detBtn.onclick = () => {
       openTrackingReviewModal({
         trackingDir: String(clip.tracking_output_dir),
         videoPath: String(parentPath),
         clip,
       });
     };
-    metaDiv.appendChild(t);
+    metaDiv.appendChild(detBtn);
+
+    metaDiv.appendChild(document.createTextNode(" · "));
+    const ptBtn = document.createElement("button");
+    ptBtn.type = "button";
+    ptBtn.textContent = "Detection";
+    ptBtn.className = "video-subclip-plot-link";
+    ptBtn.title =
+      "Run utils/Post_track.py on this folder; saves JSON in the tracking output folder.";
+    ptBtn.onclick = () => {
+      runPostTrackForSubclip({
+        trackingDir: String(clip.tracking_output_dir),
+        videoPath: String(parentPath),
+        clip,
+        numFly: (() => {
+          const n = Number(recObj.fly_count);
+          return Number.isFinite(n) && n > 0 ? Math.round(n) : undefined;
+        })(),
+      });
+    };
+    metaDiv.appendChild(ptBtn);
   }
   tdName.appendChild(metaDiv);
 
@@ -1178,6 +1715,8 @@ function buildVideoSubclipRow(parentPath, videoEntry, clip) {
   tr.appendChild(tdName);
   tr.appendChild(mkVideoClipsTdSubclipDash());
   tr.appendChild(mkVideoSnapTdPlaceholder());
+  tr.appendChild(mkVideoDetectTdPlaceholder());
+  tr.appendChild(mkVideoTrackTdPlaceholder());
   tr.appendChild(mkVideoNumTd(recObj.disk_pixel));
   tr.appendChild(mkVideoNumTd(recObj.disk_radius_mm));
   tr.appendChild(mkVideoNumTd(Number.isFinite(s0) ? Math.round(s0) : null));
@@ -1902,6 +2441,8 @@ async function renderRegisteredVideoRows(project, { preserveSelection = false } 
     tr.appendChild(tdName);
     tr.appendChild(tdClips);
     tr.appendChild(tdSnap);
+    tr.appendChild(mkVideoDetectTdPlaceholder());
+    tr.appendChild(mkVideoTrackTdPlaceholder());
     tr.appendChild(mkVideoNumTd(recObj.disk_pixel));
     tr.appendChild(mkVideoNumTd(recObj.disk_radius_mm));
     tr.appendChild(mkVideoNumTd(recObj.frame_start));
@@ -1930,6 +2471,7 @@ async function renderRegisteredVideoRows(project, { preserveSelection = false } 
   updateSubclipSelectAllState();
   updateVideoColumnFoldHeaderState();
   await loadSnapshotLabelCounts(project.name);
+  await loadDetectionTrackingStatuses(project.name);
 }
 
 function renderProjectDetail(project) {
@@ -2344,9 +2886,13 @@ quickRunFastviewBtn.onclick = () => {
 };
 
 if (snapshotBatchBtn) {
-  snapshotBatchBtn.onclick = async () => {
+  snapshotBatchBtn.onclick = () => {
     if (!selectedProject) {
       setStatus("Select a project first.");
+      return;
+    }
+    if (!snapshotBatchModal) {
+      setStatus("Snapshot batch dialog is unavailable.");
       return;
     }
     const items = collectSnapshotBatchItems();
@@ -2355,18 +2901,7 @@ if (snapshotBatchBtn) {
       setStatus("Select at least one video and/or subclip for snapshot batch.");
       return;
     }
-    setStatus("Starting snapshot batch (queued like QuickRun)…");
-    try {
-      const r = await req("/api/project/snapshot_batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: selectedProject, items }),
-      });
-      const dest = r.quickrun_url || `/quickrun?session=${encodeURIComponent(r.session_id)}`;
-      window.location.href = dest;
-    } catch (err) {
-      setStatus(err.message || "Snapshot batch failed.");
-    }
+    openSnapshotBatchModal(items);
   };
 }
 
@@ -2387,6 +2922,45 @@ if (trackingBatchBtn) {
       return;
     }
     openTrackingBatchModal(items);
+  };
+}
+
+if (postTrackBatchBtn) {
+  postTrackBatchBtn.onclick = () => {
+    if (!selectedProject) {
+      setStatus("Select a project first.");
+      return;
+    }
+    const items = collectSnapshotBatchItems();
+    if (items === null) return;
+    if (!items.length) {
+      setStatus("Select at least one video and/or subclip for Tracking.");
+      return;
+    }
+    openPostTrackBatchModal(items);
+  };
+}
+
+if (postTrackBatchStartBtn) {
+  postTrackBatchStartBtn.onclick = async () => {
+    if (!selectedProject || !postTrackBatchItems || !postTrackBatchItems.length) return;
+    const body = collectPostTrackBatchPayload();
+    if (postTrackBatchModalStatus) postTrackBatchModalStatus.textContent = "Queueing Post_track jobs…";
+    else setStatus("Queueing Post_track jobs…");
+    try {
+      const r = await req("/api/project/post_track_batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      closePostTrackBatchModal();
+      const dest = r.quickrun_url || `/quickrun?session=${encodeURIComponent(r.session_id)}`;
+      window.location.href = dest;
+    } catch (err) {
+      const msg = err.message || "Post_track batch failed.";
+      if (postTrackBatchModalStatus) postTrackBatchModalStatus.textContent = msg;
+      else setStatus(msg);
+    }
   };
 }
 
@@ -2460,7 +3034,54 @@ if (quickRunResetDefaultsBtn) {
 }
 
 if (trackingBatchResetDefaultsBtn) {
-  trackingBatchResetDefaultsBtn.onclick = () => applyTrackingBatchDefaultsToForm();
+  trackingBatchResetDefaultsBtn.onclick = () => {
+    applyTrackingBatchDefaultsToForm();
+    updateTrackingBatchDerivedPreview();
+    scheduleTrackingBatchCommandPreview();
+  };
+}
+
+if (postTrackBatchResetDefaultsBtn) {
+  postTrackBatchResetDefaultsBtn.onclick = () => {
+    applyPostTrackBatchDefaultsToForm();
+    updatePostTrackBatchPreview();
+    schedulePostTrackBatchCommandPreview();
+  };
+}
+
+if (snapshotBatchResetDefaultsBtn) {
+  snapshotBatchResetDefaultsBtn.onclick = () => {
+    applySnapshotBatchDefaultsToForm();
+    updateSnapshotBatchDerivedPreview();
+    scheduleSnapshotBatchCommandPreview();
+  };
+}
+
+if (snapshotBatchStartBtn) {
+  snapshotBatchStartBtn.onclick = async () => {
+    if (!selectedProject || !snapshotBatchItems || !snapshotBatchItems.length) return;
+    if (snapshotBatchModalStatus) snapshotBatchModalStatus.textContent = "Queueing snapshot batch…";
+    else setStatus("Queueing snapshot batch…");
+    try {
+      const body = collectSnapshotBatchPayload();
+      const r = await req("/api/project/snapshot_batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      closeSnapshotBatchModal();
+      const dest = r.quickrun_url || `/quickrun?session=${encodeURIComponent(r.session_id)}`;
+      window.location.href = dest;
+    } catch (err) {
+      const msg = err.message || "Snapshot batch failed.";
+      if (snapshotBatchModalStatus) snapshotBatchModalStatus.textContent = msg;
+      else setStatus(msg);
+    }
+  };
+}
+
+if (closeSnapshotBatchModalBtn) {
+  closeSnapshotBatchModalBtn.onclick = closeSnapshotBatchModal;
 }
 
 if (closeQuickRunModalBtn) {
@@ -2469,6 +3090,16 @@ if (closeQuickRunModalBtn) {
 
 if (closeTrackingBatchModalBtn) {
   closeTrackingBatchModalBtn.onclick = closeTrackingBatchModal;
+}
+
+if (closePostTrackBatchModalBtn) {
+  closePostTrackBatchModalBtn.onclick = closePostTrackBatchModal;
+}
+
+if (snapshotBatchModal) {
+  snapshotBatchModal.onclick = (e) => {
+    if (e.target === snapshotBatchModal) closeSnapshotBatchModal();
+  };
 }
 
 if (quickRunModal) {
@@ -2481,6 +3112,79 @@ if (trackingBatchModal) {
   trackingBatchModal.onclick = (e) => {
     if (e.target === trackingBatchModal) closeTrackingBatchModal();
   };
+}
+
+if (postTrackBatchModal) {
+  postTrackBatchModal.onclick = (e) => {
+    if (e.target === postTrackBatchModal) closePostTrackBatchModal();
+  };
+}
+
+for (const el of [
+  snapshotBatchOutputDir,
+  snapshotBatchWeights,
+  snapshotBatchConfThres,
+  snapshotBatchImgSize,
+  snapshotBatchQuiet,
+  snapshotBatchExistOk,
+  snapshotBatchRerun,
+]) {
+  if (!el) continue;
+  el.addEventListener("input", () => {
+    updateSnapshotBatchDerivedPreview();
+    scheduleSnapshotBatchCommandPreview();
+  });
+  el.addEventListener("change", () => {
+    updateSnapshotBatchDerivedPreview();
+    scheduleSnapshotBatchCommandPreview();
+  });
+}
+
+for (const el of [
+  trackingBatchOutputDir,
+  trackingBatchWeights,
+  trackingBatchDevice,
+  trackingBatchConfThres,
+  trackingBatchImgSize,
+  trackingBatchNameOverride,
+  trackingBatchDirOverride,
+  trackingBatchTarTrStart,
+  trackingBatchFrameStart,
+  trackingBatchFrameEnd,
+  trackingBatchQuiet,
+  trackingBatchExistOk,
+  trackingBatchDetectFlagsSection,
+  trackingBatchInitLabelPath,
+  trackingBatchUseSnapshotInit,
+  trackingBatchAllowMissingInit,
+  trackingBatchRerun,
+]) {
+  if (!el) continue;
+  el.addEventListener("input", () => {
+    updateTrackingBatchDerivedPreview();
+    scheduleTrackingBatchCommandPreview();
+  });
+  el.addEventListener("change", () => {
+    updateTrackingBatchDerivedPreview();
+    scheduleTrackingBatchCommandPreview();
+  });
+}
+
+for (const el of [
+  postTrackBatchNumFly,
+  postTrackBatchWorkers,
+  postTrackBatchUseSnapshotInit,
+  postTrackBatchRerun,
+]) {
+  if (!el) continue;
+  el.addEventListener("input", () => {
+    updatePostTrackBatchPreview();
+    schedulePostTrackBatchCommandPreview();
+  });
+  el.addEventListener("change", () => {
+    updatePostTrackBatchPreview();
+    schedulePostTrackBatchCommandPreview();
+  });
 }
 
 importVideoMetaTsvBtn.onclick = async () => {

@@ -25,6 +25,39 @@ cd YoloFly
 pip install -r requirements.txt
 ```
 
+## Web app quick start
+
+If you use the Project Manager web UI, follow this order:
+
+1. **Project build**: run `python webapp/yolo_review_app.py`, open `http://127.0.0.1:8000`, create a project.
+2. **Load videos**: add videos by directory or by absolute paths.
+3. **Meta info**: fill per-video metadata (`frame_start`, `frame_end`, `fly_count`, disk info).
+4. **Snapshot create + correction**: run **Snapshot (1 frame)** from the modal (optional **Rerun**), then correct labels in `detect_explore` if needed.
+5. **Detection** (toolbar button): run **`detect_2.py`** tracking batch (outputs under the project **Tracking batch base**).
+6. **Tracking** (toolbar button): run **`utils/Post_track.py`** batch on those outputs, then open results in **`detect_explore`** (table **Tracking** column **Open**, or from Results).
+
+See `webapp/README.md` and `documentation/webtools/02-project-manager.md` for the distinction between toolbar labels (**Detection** = `detect_2`, **Tracking** = `Post_track`) and the table columns of the same names.
+
+## Tracking policy (current)
+
+`utils/Post_track.py` and `utils/Head_bind.py` now use the following safeguards to reduce ID/head switches:
+
+- **Body large-box filter (`Clear_lst`)**
+  - oversized body boxes are checked before removal
+  - **class 4 (flapping) protection**: if c4 overlaps a body box by >= 85%, that body box is kept
+  - **class 5 (mount/holding) protection**: mount-aware checks protect reliable body boxes in c5 regions
+- **Lost body recovery**
+  - when a body is temporarily lost, recovery reinserts it at the **last known location** (no drift shift)
+- **Head binding**
+  - unique/singleton matches are assigned first
+  - for remaining ambiguous bodies, assignment uses **previous-frame body->head vector consistency**
+  - each assigned head is immediately removed from all other option lists to prevent duplicates
+
+Detailed design notes:
+
+- `documentation/tracking/main_fly_tracking.md`
+- `documentation/tracking/head_bind.md`
+
 
 ```bash
 # assign the loc of the model, video, etc

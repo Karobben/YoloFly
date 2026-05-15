@@ -86,7 +86,8 @@
             <button type="button" id="batchDeleteVideosBtn">Delete selected</button>
             <button type="button" id="quickRunFastviewBtn">QuickRun</button>
             <button type="button" id="snapshotBatchBtn" title="detect_2.py single-frame snapshot at each video’s frame start">Snapshot (1 frame)</button>
-            <button type="button" id="trackingBatchBtn" title="detect_2.py tracking; can initialize first tracked frame from snapshot labels">Tracking</button>
+            <button type="button" id="trackingBatchBtn" title="detect_2.py tracking; can initialize first tracked frame from snapshot labels">Detection</button>
+            <button type="button" id="postTrackBatchBtn" title="Run utils/Post_track.py from tracking outputs and keep JSON results">Tracking</button>
           </div>
           <p id="videoListEmpty" class="video-list-empty">No videos.</p>
           <div id="videoTableWrap" class="video-table-wrap hidden">
@@ -123,6 +124,8 @@
                     scope="col"
                     title="Class 0 / class 1 counts from the snapshot label file; green when aligned with Flies. Click to sort."
                   >Detected Flies<span class="video-sort-dir" aria-hidden="true"></span></th>
+                  <th class="col-num" scope="col" title="detect_2 tracking output exists for this row">Detection</th>
+                  <th class="col-num" scope="col" title="Post_track JSON exists; click Open to jump to detect_explore">Tracking</th>
                   <th class="col-num video-th-sortable" data-video-sort="disk_pixel" scope="col">Ø px<span class="video-sort-dir" aria-hidden="true"></span></th>
                   <th class="col-num video-th-sortable" data-video-sort="disk_radius_mm" scope="col">R mm<span class="video-sort-dir" aria-hidden="true"></span></th>
                   <th class="col-num video-th-sortable" data-video-sort="frame_start" scope="col">Frame start<span class="video-sort-dir" aria-hidden="true"></span></th>
@@ -346,6 +349,70 @@
     </div>
   </div>
 
+  <div id="snapshotBatchModal" class="video-modal quickrun-modal hidden" role="dialog" aria-modal="true" aria-label="Snapshot batch">
+    <div class="video-modal-card quickrun-modal-card">
+      <div class="video-modal-header">
+        <strong>Snapshot Batch (1 frame)</strong>
+        <button id="closeSnapshotBatchModalBtn" type="button">Close</button>
+      </div>
+      <p id="snapshotBatchScopeText" class="quickrun-scope"></p>
+      <p class="quickrun-note">Each selected video or subclip runs as its own <code>detect_2.py</code> snapshot job. After you start, you are sent to the progress page.</p>
+      <div class="quickrun-sections">
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Run</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Snapshot output base (<code>--project</code>, relative to project parent unless absolute)
+              <input id="snapshotBatchOutputDir" type="text" value="snapshot" />
+            </label>
+          </div>
+          <div class="quickrun-check-row">
+            <label><input id="snapshotBatchQuiet" type="checkbox" checked /> Add --quiet</label>
+            <label><input id="snapshotBatchExistOk" type="checkbox" checked /> Add --exist-ok</label>
+            <label><input id="snapshotBatchRerun" type="checkbox" /> Rerun even if snapshot outputs exist</label>
+          </div>
+        </section>
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">YOLO</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Weights (<code>--weights</code>, relative to project parent)
+              <input id="snapshotBatchWeights" type="text" value="YoloFly/runs/train/2022_05_11_p633_1280_5l_e700_b128/weights/best.pt" />
+            </label>
+            <label>Conf threshold
+              <input id="snapshotBatchConfThres" type="number" step="any" value="0.4" />
+            </label>
+            <label>Image size
+              <input id="snapshotBatchImgSize" type="number" min="32" step="32" value="1280" />
+            </label>
+          </div>
+        </section>
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Derived per-target parameters</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Selected <code>--source</code> values
+              <textarea id="snapshotBatchSourcePreview" rows="4" readonly></textarea>
+            </label>
+            <label class="meta-span-2">Auto-generated parameters
+              <textarea id="snapshotBatchDerivedPreview" rows="6" readonly></textarea>
+            </label>
+          </div>
+        </section>
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Real command preview</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Commands that will run
+              <textarea id="snapshotBatchCommandPreview" rows="8" readonly></textarea>
+            </label>
+          </div>
+        </section>
+      </div>
+      <div class="meta-actions-row quickrun-actions">
+        <button id="snapshotBatchStartBtn" type="button">Start snapshot batch</button>
+        <button id="snapshotBatchResetDefaultsBtn" type="button">Reset defaults</button>
+      </div>
+      <p id="snapshotBatchModalStatus" class="meta-status"></p>
+    </div>
+  </div>
+
   <div id="trackingBatchModal" class="video-modal quickrun-modal hidden" role="dialog" aria-modal="true" aria-label="Tracking batch">
     <div class="video-modal-card quickrun-modal-card">
       <div class="video-modal-header">
@@ -446,9 +513,18 @@
             </label>
           </div>
         </section>
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Real command preview</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Commands that will run
+              <textarea id="trackingBatchCommandPreview" rows="8" readonly></textarea>
+            </label>
+          </div>
+          <p class="quickrun-note">Updates automatically as parameters change. Commands are generated by the backend with resolved paths.</p>
+        </section>
       </div>
       <div class="meta-actions-row quickrun-actions">
-        <button id="trackingBatchStartBtn" type="button">Start tracking</button>
+        <button id="trackingBatchStartBtn" type="button">Start detection</button>
         <button id="trackingBatchResetDefaultsBtn" type="button">Reset defaults</button>
       </div>
       <p id="trackingBatchModalStatus" class="meta-status"></p>
@@ -460,11 +536,11 @@
     class="video-modal meta-modal tracking-open-modal hidden"
     role="dialog"
     aria-modal="true"
-    aria-label="Review tracking parameters before opening Detect explorer"
+    aria-label="Review detection parameters before opening Detect explorer"
   >
     <div class="video-modal-card meta-modal-card tracking-open-modal-card">
       <div class="video-modal-header">
-        <strong>Open Tracking</strong>
+        <strong>Open Detection</strong>
         <button id="closeTrackingOpenModalBtn" type="button">Close</button>
       </div>
       <p class="tracking-open-hint">
@@ -475,6 +551,56 @@
       <div class="meta-actions-row">
         <button id="trackingOpenConfirmBtn" type="button">Open in Detect explorer</button>
       </div>
+    </div>
+  </div>
+
+  <div id="postTrackBatchModal" class="video-modal quickrun-modal hidden" role="dialog" aria-modal="true" aria-label="Post-track batch">
+    <div class="video-modal-card quickrun-modal-card">
+      <div class="video-modal-header">
+        <strong>Tracking Batch (Post_track)</strong>
+        <button id="closePostTrackBatchModalBtn" type="button">Close</button>
+      </div>
+      <p id="postTrackBatchScopeText" class="quickrun-scope"></p>
+      <p class="quickrun-note">Run <code>utils/Post_track.py</code> for each selected video/subclip using existing tracking detection CSV. JSON output is saved directly in each tracking output folder.</p>
+      <div class="quickrun-sections">
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Run</h3>
+          <div class="meta-grid quickrun-grid">
+            <label>Num flies (--num-fly)
+              <input id="postTrackBatchNumFly" type="number" min="1" step="1" placeholder="blank = per-video fly_count or default 12" />
+            </label>
+            <label>Workers (--workers)
+              <input id="postTrackBatchWorkers" type="number" min="1" step="1" value="1" />
+            </label>
+          </div>
+          <div class="quickrun-check-row">
+            <label><input id="postTrackBatchUseSnapshotInit" type="checkbox" checked /> Initialize first tracked frame from Snapshot labels when available</label>
+            <label><input id="postTrackBatchRerun" type="checkbox" /> Rerun even if Post_track JSON exists</label>
+          </div>
+        </section>
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Selected targets</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Targets
+              <textarea id="postTrackBatchSourcePreview" rows="5" readonly></textarea>
+            </label>
+          </div>
+        </section>
+        <section class="quickrun-section">
+          <h3 class="quickrun-section-title">Real command preview</h3>
+          <div class="meta-grid quickrun-grid">
+            <label class="meta-span-2">Commands that will run
+              <textarea id="postTrackBatchCommandPreview" rows="8" readonly></textarea>
+            </label>
+          </div>
+          <p class="quickrun-note">Updates automatically as parameters change. Commands are generated by the backend with resolved paths.</p>
+        </section>
+      </div>
+      <div class="meta-actions-row quickrun-actions">
+        <button id="postTrackBatchStartBtn" type="button">Start tracking</button>
+        <button id="postTrackBatchResetDefaultsBtn" type="button">Reset defaults</button>
+      </div>
+      <p id="postTrackBatchModalStatus" class="meta-status"></p>
     </div>
   </div>
 

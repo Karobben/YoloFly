@@ -1,9 +1,12 @@
 const qs = new URLSearchParams(window.location.search);
 const videoPath = (qs.get("video_path") || "").trim();
+/** Canonical path from `/api/quickrun/results_for_video` once loaded; used for deep links. */
+let linkVideoPath = videoPath;
 const projectFilter = (qs.get("project") || "").trim();
 const clipIdFilter = (qs.get("clip_id") || "").trim();
 
 const vrError = document.getElementById("vrError");
+const vrActionMsg = document.getElementById("vrActionMsg");
 const vrEmpty = document.getElementById("vrEmpty");
 const vrIntro = document.getElementById("vrIntro");
 const vrVideoPath = document.getElementById("vrVideoPath");
@@ -12,6 +15,54 @@ const vrProjectName = document.getElementById("vrProjectName");
 const vrClipRow = document.getElementById("vrClipRow");
 const vrClipId = document.getElementById("vrClipId");
 const vrRuns = document.getElementById("vrRuns");
+
+function setVrActionMsg(text, isErr) {
+  if (!vrActionMsg) return;
+  if (!text) {
+    vrActionMsg.textContent = "";
+    vrActionMsg.classList.add("hidden");
+    vrActionMsg.classList.remove("vr-action-msg-err");
+    return;
+  }
+  vrActionMsg.textContent = text;
+  vrActionMsg.classList.remove("hidden");
+  vrActionMsg.classList.toggle("vr-action-msg-err", !!isErr);
+}
+
+function buildDeleteSectionPayload(scope, resultsType, section) {
+  const body = {
+    video_path: linkVideoPath || videoPath,
+    scope,
+  };
+  if (projectFilter) body.project = projectFilter;
+  if (clipIdFilter) body.clip_id = clipIdFilter;
+  if (scope === "all") {
+    return body;
+  }
+  body.results_type = resultsType;
+  if (section) body.section = section;
+  return body;
+}
+
+async function postDeleteResultsSection(payload) {
+  const r = await fetch("/api/quickrun/results_delete_section", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+  return d;
+}
+
+async function deleteQuickrunSession(sid) {
+  const r = await fetch(`/api/quickrun/session/${encodeURIComponent(sid)}`, {
+    method: "DELETE",
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+  return d;
+}
 
 function esc(s) {
   const d = document.createElement("div");
@@ -25,7 +76,7 @@ function localFileUrl(absPath) {
 
 function csvTablePageUrl(absPath) {
   const q = new URLSearchParams({ path: absPath });
-  if (videoPath) q.set("video_path", videoPath);
+  if (linkVideoPath) q.set("video_path", linkVideoPath);
   if (projectFilter) q.set("project", projectFilter);
   if (clipIdFilter) q.set("clip_id", clipIdFilter);
   return `/csv-table?${q.toString()}`;
@@ -42,7 +93,7 @@ function isTotalSpeedCsvPath(absPath) {
 
 function totalSpeedPlotPageUrl(absPath) {
   const q = new URLSearchParams({ path: absPath });
-  if (videoPath) q.set("video_path", videoPath);
+  if (linkVideoPath) q.set("video_path", linkVideoPath);
   if (projectFilter) q.set("project", projectFilter);
   if (clipIdFilter) q.set("clip_id", clipIdFilter);
   return `/total-speed-plot?${q.toString()}`;
@@ -215,7 +266,8 @@ function detectExploreSnapshotUrl(absDir) {
 
 function detectExploreTrackingUrl(absDir) {
   const u = new URLSearchParams({ tracking_dir: absDir });
-  if (videoPath) u.set("video_path", videoPath);
+  const vp = (linkVideoPath || "").trim();
+  if (vp) u.set("video_path", vp);
   return `/detect_explore?${u.toString()}`;
 }
 
@@ -227,9 +279,10 @@ function isSnapshotOutputDirectory(a) {
 }
 
 function isTrackingOutputDirectory(a) {
+  const label = String(a.label || "").toLowerCase();
   return (
     a.kind === "output_directory" &&
-    String(a.label || "").toLowerCase().includes("tracking")
+    (label.includes("tracking") || label.includes("post-track"))
   );
 }
 
@@ -292,25 +345,29 @@ function renderImageArtifactCard(a) {
     </div>`;
 }
 
-function renderFoldableSection(g) {
+function renderFoldableSection(g, resultsTypeKey) {
   const count = g.items.length;
   const isImages = g.key === "images";
   const inner = isImages
     ? `<div class="vr-artifacts vr-artifacts-grid">${g.items.map(renderImageArtifactCard).join("")}</div>`
     : `<div class="vr-artifacts">${g.items.map(renderArtifactBlock).join("")}</div>`;
+  const delBtn = `<button type="button" class="qr-btn-danger qr-btn-small vr-section-delete-btn" data-vr-del-scope="section" data-vr-results-type="${esc(resultsTypeKey)}" data-vr-section="${esc(g.key)}" title="Delete these files on disk and remove them from the results index">Delete</button>`;
   return `
     <details class="vr-type-fold" data-section="${esc(g.key)}" open>
       <summary class="vr-type-summary">
         <span class="vr-type-summary-label">${esc(g.title)}</span>
-        <span class="vr-type-count">${count}</span>
+        <span class="vr-summary-end">
+          <span class="vr-type-count">${count}</span>
+          ${delBtn}
+        </span>
       </summary>
       <div class="vr-type-body">${inner}</div>
     </details>`;
 }
 
-function renderFileTypeSections(artifacts) {
+function renderFileTypeSections(artifacts, resultsTypeKey) {
   const groups = groupArtifactsBySection(artifacts);
-  return groups.map((g) => renderFoldableSection(g)).join("");
+  return groups.map((g) => renderFoldableSection(g, resultsTypeKey)).join("");
 }
 
 function renderArtifactSections(artifacts) {
@@ -318,14 +375,18 @@ function renderArtifactSections(artifacts) {
   return typeGroups
     .map((tg) => {
       const n = tg.items.length;
+      const delBtn = `<button type="button" class="qr-btn-danger qr-btn-small vr-section-delete-btn" data-vr-del-scope="results_type" data-vr-results-type="${esc(tg.key)}" title="Delete every output listed under ${esc(tg.title)} (all file types)">Delete all</button>`;
       return `
     <details class="vr-result-type-fold" data-results-type="${esc(tg.key)}" open>
       <summary class="vr-type-summary vr-result-type-summary">
         <span class="vr-type-summary-label">${esc(tg.title)}</span>
-        <span class="vr-type-count">${n}</span>
+        <span class="vr-summary-end">
+          <span class="vr-type-count">${n}</span>
+          ${delBtn}
+        </span>
       </summary>
       <div class="vr-result-type-body">
-        ${renderFileTypeSections(tg.items)}
+        ${renderFileTypeSections(tg.items, tg.key)}
       </div>
     </details>`;
     })
@@ -361,6 +422,71 @@ function renderFailedCard(run) {
   `;
 }
 
+async function loadResults() {
+  vrError.classList.add("hidden");
+  vrError.textContent = "";
+  vrEmpty.classList.add("hidden");
+  setVrActionMsg("", false);
+
+  const q = new URLSearchParams({ video_path: videoPath });
+  if (projectFilter) q.set("project", projectFilter);
+  if (clipIdFilter) q.set("clip_id", clipIdFilter);
+  const r = await fetch(`/api/quickrun/results_for_video?${q}`);
+  const data = await r.json();
+  if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
+
+  linkVideoPath = String(data.video_path || videoPath || "").trim();
+
+  vrIntro.classList.remove("hidden");
+  vrVideoPath.textContent = data.video_path || videoPath;
+  if (data.project_filter) {
+    vrProjectRow.classList.remove("hidden");
+    vrProjectName.textContent = data.project_filter;
+  }
+  if (clipIdFilter && vrClipRow && vrClipId) {
+    vrClipRow.classList.remove("hidden");
+    vrClipId.textContent = clipIdFilter;
+  }
+
+  const artifacts = data.artifacts || [];
+  const failedRuns = data.failed_runs || [];
+
+  if (!artifacts.length && !failedRuns.length) {
+    vrRuns.innerHTML = "";
+    vrEmpty.classList.remove("hidden");
+    return;
+  }
+
+  let html = "";
+  if (artifacts.length) {
+    const nArt = artifacts.length;
+    const delAllOut = `<button type="button" class="qr-btn-danger qr-btn-small vr-section-delete-btn" data-vr-del-scope="all" title="Delete every listed output file and directory on disk, and clear the results index for this view">Delete all outputs</button>`;
+    html += `<section class="vr-section vr-output-root">`;
+    html += `<details class="vr-output-files-fold" open>`;
+    html += `<summary class="vr-type-summary vr-output-files-fold-summary">`;
+    html += `<span class="vr-type-summary-label">Output files</span>`;
+    html += `<span class="vr-summary-end">`;
+    html += `<span class="vr-type-count">${nArt}</span>${delAllOut}`;
+    html += `</span></summary>`;
+    html += `<div class="vr-output-files-fold-body">`;
+    html += `<p class="qr-muted vr-section-note">Each path is listed once, grouped by <strong>result type</strong> (Quick Run vs Snapshot), then by <strong>file type</strong>. Use <strong>Delete</strong> on a section to remove those files or folders from disk and drop them from this index (completed job records are unchanged; a future sync may re-index outputs if the job folder still exists). <strong>Clear failed</strong> removes failed-session rows and each session’s <code>/tmp</code> log folder.</p>`;
+    html += renderArtifactSections(artifacts);
+    html += `</div></details></section>`;
+  }
+  if (failedRuns.length) {
+    const sids = [...new Set(failedRuns.map((x) => x.session_id).filter(Boolean))];
+    const sidAttr = esc(sids.join(","));
+    const clearBtn = `<button type="button" class="qr-btn-danger qr-btn-small vr-section-delete-btn" data-vr-clear-failed="${sidAttr}" title="Remove failed sessions from the database and delete their /tmp session folders">Clear failed</button>`;
+    html += `<section class="vr-section vr-failed-root"><details class="vr-type-fold" open>`;
+    html += `<summary class="vr-type-summary"><span class="vr-type-summary-label">Failed attempts</span>`;
+    html += `<span class="vr-summary-end"><span class="vr-type-count">${failedRuns.length}</span>${clearBtn}</span></summary>`;
+    html += `<div class="vr-type-body"><p class="qr-muted vr-fold-note">Only jobs whose session still exists in the monitor history.</p>`;
+    html += failedRuns.map(renderFailedCard).join("");
+    html += `</div></details></section>`;
+  }
+  vrRuns.innerHTML = html;
+}
+
 async function main() {
   if (!videoPath) {
     vrError.textContent =
@@ -370,58 +496,75 @@ async function main() {
   }
 
   try {
-    const q = new URLSearchParams({ video_path: videoPath });
-    if (projectFilter) q.set("project", projectFilter);
-    if (clipIdFilter) q.set("clip_id", clipIdFilter);
-    const r = await fetch(`/api/quickrun/results_for_video?${q}`);
-    const data = await r.json();
-    if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
-
-    vrIntro.classList.remove("hidden");
-    vrVideoPath.textContent = data.video_path || videoPath;
-    if (data.project_filter) {
-      vrProjectRow.classList.remove("hidden");
-      vrProjectName.textContent = data.project_filter;
-    }
-    if (clipIdFilter && vrClipRow && vrClipId) {
-      vrClipRow.classList.remove("hidden");
-      vrClipId.textContent = clipIdFilter;
-    }
-
-    const artifacts = data.artifacts || [];
-    const failedRuns = data.failed_runs || [];
-
-    if (!artifacts.length && !failedRuns.length) {
-      vrEmpty.classList.remove("hidden");
-      return;
-    }
-
-    let html = "";
-    if (artifacts.length) {
-      const nArt = artifacts.length;
-      html += `<section class="vr-section vr-output-root">`;
-      html += `<details class="vr-output-files-fold" open>`;
-      html += `<summary class="vr-type-summary vr-output-files-fold-summary">`;
-      html += `<span class="vr-type-summary-label">Output files</span>`;
-      html += `<span class="vr-type-count">${nArt}</span>`;
-      html += `</summary>`;
-      html += `<div class="vr-output-files-fold-body">`;
-      html += `<p class="qr-muted vr-section-note">Each path is listed once, grouped by <strong>result type</strong> (Quick Run vs Snapshot), then by <strong>file type</strong>. Click a section title to fold or unfold. Deleting a session from Running progress does not remove these entries while the files remain on disk.</p>`;
-      html += renderArtifactSections(artifacts);
-      html += `</div></details></section>`;
-    }
-    if (failedRuns.length) {
-      html += `<section class="vr-section vr-failed-root"><details class="vr-type-fold" open>`;
-      html += `<summary class="vr-type-summary"><span class="vr-type-summary-label">Failed attempts</span><span class="vr-type-count">${failedRuns.length}</span></summary>`;
-      html += `<div class="vr-type-body"><p class="qr-muted vr-fold-note">Only jobs whose session still exists in the monitor history.</p>`;
-      html += failedRuns.map(renderFailedCard).join("");
-      html += `</div></details></section>`;
-    }
-    vrRuns.innerHTML = html;
+    await loadResults();
   } catch (e) {
     vrError.textContent = e.message || String(e);
     vrError.classList.remove("hidden");
   }
 }
+
+vrRuns.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".vr-section-delete-btn");
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  const clearFailed = btn.getAttribute("data-vr-clear-failed");
+  if (clearFailed != null && clearFailed !== "") {
+    const sids = clearFailed.split(",").map((s) => s.trim()).filter((s) => /^[0-9a-f]{32}$/.test(s));
+    if (!sids.length) return;
+    if (
+      !window.confirm(
+        `Remove ${sids.length} failed session(s) from the database and delete each session’s folder under /tmp?`,
+      )
+    ) {
+      return;
+    }
+    btn.disabled = true;
+    try {
+      for (const sid of sids) {
+        await deleteQuickrunSession(sid);
+      }
+      setVrActionMsg(`Cleared ${sids.length} failed session(s).`, false);
+      await loadResults();
+    } catch (err) {
+      setVrActionMsg(err.message || String(err), true);
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
+
+  const scope = btn.getAttribute("data-vr-del-scope");
+  if (!scope) return;
+  const resultsType = (btn.getAttribute("data-vr-results-type") || "").trim();
+  const section = (btn.getAttribute("data-vr-section") || "").trim() || undefined;
+
+  let confirmMsg = "";
+  if (scope === "all") {
+    confirmMsg =
+      "Delete every output file and directory listed here from disk, and remove them from the results index?";
+  } else if (scope === "results_type") {
+    const label = resultsType.replace(/_/g, " ");
+    confirmMsg = `Delete all outputs in “${label}” from disk and remove them from the index?`;
+  } else if (scope === "section") {
+    confirmMsg = `Delete all files in the “${section}” section from disk and remove them from the index?`;
+  } else {
+    return;
+  }
+  if (!window.confirm(confirmMsg)) return;
+
+  btn.disabled = true;
+  try {
+    const payload = buildDeleteSectionPayload(scope, resultsType, section);
+    const d = await postDeleteResultsSection(payload);
+    setVrActionMsg(d.message || "Deleted.", false);
+    await loadResults();
+  } catch (err) {
+    setVrActionMsg(err.message || String(err), true);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 main();

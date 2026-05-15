@@ -18,7 +18,12 @@ Typical query parameters:
 - Requires **`video_path`**.
 - Canonicalizes path via **`_resolve_stored_video_path`** with fallbacks.
 - Optional **`project`** query must be a valid project name if provided.
-- Returns **`runs`**: list of job rows from **`_quickrun_jobs_for_video`** (joined with session metadata), including saved **`outputs`** JSON when the job completed successfully.
+- Optional **`clip_id`** scopes artifacts to one subclip row when positive.
+- Syncs completed jobs into **`quickrun_video_artifacts`** for that video (scoped by **`project`** and **`clip_id`** when given).
+- Returns **`artifacts`**: deduplicated indexed paths for that video. When **`project`** is set, paths are **restricted to the project’s configured tracking result directory** (`tracking_output` / resolved tracking base) so the home table **Detection** / **Tracking** columns only reflect outputs in the designated result tree.
+- Returns **`failed_runs`**: recent failed QuickRun jobs for troubleshooting.
+
+The home page uses this endpoint (via `home.js`) to paint the **Detection** and **Tracking** status cells; it does **not** return a full session job listing (use **`/video-results`** / session APIs for history).
 
 ## Output metadata (`_quickrun_compute_outputs`)
 
@@ -51,4 +56,4 @@ Video streaming helpers include **`/api/media`**, **`/api/video_file_by_path`**,
 
 From the home videos table, **Results** navigates to **`/video-results`** with the row’s video path and project name so the user sees **all QuickRun jobs** tied to that file without hunting session IDs.
 
-**Subclips on the home page** use the same artifact discovery as this results flow (including syncing completed jobs into **`quickrun_video_artifacts`**) and list clips stored for each video’s **`total_speed.csv`** outputs — see **`Document/02-project-manager.md`** → *Subclips (Total speed — interactive plot)* and **`GET /api/project/video_subclips`** in **`Document/07-api-reference.md`**.
+**Subclips on the home page** use the same artifact discovery as this results flow (including syncing completed jobs into **`quickrun_video_artifacts`**) and list clips stored for each video’s **`total_speed.csv`** outputs — see **`documentation/webtools/02-project-manager.md`** → *Subclips (Total speed — interactive plot)* and **`GET /api/project/video_subclips`** in **`documentation/webtools/07-api-reference.md`**.

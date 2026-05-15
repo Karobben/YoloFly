@@ -5,8 +5,9 @@
 | URL | Files |
 |-----|--------|
 | `/quickrun` (page title **Running progress**) | `templates/quickrun.html`, `static/quickrun.js` |
+| `/gpu-monitor` (page title **GPU Monitor**) | `templates/gpu_monitor.html`, `static/gpu_monitor.js` |
 
-Query parameter **`session=<32-char hex>`** focuses polling on one session (returned by start API). The same UI is used to monitor multiple kinds of runs submitted to this flow.
+Query parameter **`session=<32-char hex>`** focuses polling on one session (returned by start API). The same session storage is used for multiple kinds of runs (`fastview`, `snapshot`, `tracking`).
 
 ## Starting a session
 
@@ -43,6 +44,24 @@ For each job in order:
 4. Updates **`log_tail`** (last N lines) for UI polling.
 
 Session **`session_status`** and **`finished_at`** are updated when all jobs complete.
+
+### Tracking worker parallelism by device
+
+Tracking sessions can include a device string (for example `0,1,2`). For `session_kind: tracking`:
+
+- When multiple device ids are provided, `_quickrun_run_tracking_session_worker_parallel` runs one active tracking job per device.
+- As soon as one device finishes its current job, the next queued job is launched on that freed device.
+- Each job stores the assigned device in `entry_snapshot.tracking_device`; command builder injects `--device <assigned>`.
+- With one/empty device, behavior falls back to the sequential worker.
+
+## GPU monitor and kill actions
+
+- **`GET /api/gpu/monitor`** returns:
+  - GPU utilization/memory/temperature from `nvidia-smi`
+  - active compute processes per GPU
+  - best-effort mapping of process `pid` to currently running QuickRun jobs
+- **`POST /api/quickrun/kill_job`** terminates a running detect_2 QuickRun job (`tracking`/`snapshot`) by session+job id and marks it failed in DB.
+- **`POST /api/gpu/kill_pid`** terminates an external GPU compute PID (must currently appear in `nvidia-smi --query-compute-apps`).
 
 ## SQLite schema (summary)
 
